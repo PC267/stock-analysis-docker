@@ -1,0 +1,524 @@
+# ========================================
+# 股票预测系统配置
+# 自动生成的配置文件，包含所有参数说明
+# ========================================
+
+stock_system:
+
+# ==================== 股票配置 ====================
+  stock:
+    # 股票代码，如：000001
+    code: '000001'
+    # 股票名称，如：平安银行
+    name: 平安银行
+    # 模拟天数
+    simulation_days: 20
+
+# ==================== 数据配置 ====================
+  data:
+    # 起始日期偏移天数，如：3650表示10年前
+    start_date_offset_days: 3650
+    # 结束日期，可以是具体日期或"today"
+    end_date: 2026-02-03 09:00:17.143075
+    # 数据缓存目录
+    cache_dir: stock_data
+    # 结果保存目录
+    results_dir: results
+
+# ==================== 特征配置 ====================
+  features:
+    technical_indicators:
+      # 是否启用技术特征提取
+      enabled: true
+      # RSI计算周期
+      rsi_period: 14
+      # MACD快速移动平均周期
+      macd_fast: 12
+      # MACD慢速移动平均周期
+      macd_slow: 26
+      # MACD信号线周期
+      macd_signal: 9
+      # 布林带窗口大小
+      bollinger_window: 20
+      # 布林带标准差倍数
+      bollinger_num_std: 2
+      kdj_period: 9
+      kdj_smooth1: 3
+      kdj_smooth2: 3
+      ma_periods:
+      - 5
+      - 10
+      - 20
+      - 60
+      - 120
+      atr_period: 14
+
+# ==================== 技术特征配置 ====================
+    technical_features:
+      # 是否包含技术指标
+      include_indicators: true
+      # 是否返回DataFrame格式
+      return_dataframe: true
+      # 滚动正态性分析窗口
+      normality_window: 20
+      atr_period: 14
+      # 高量柱检测周期
+      high_volume_period: 1500
+
+# ==================== 集成模型配置 ====================
+  ensemble:
+    dynamic_weights:
+      # 是否启用技术特征提取
+      enabled: true
+      update_strategy: adaptive
+      update_frequency: daily
+      # 金三角背离检测回溯周期
+      lookback_period: 30
+      min_data_points: 20
+      strategy: performance_based
+      performance_window: 20
+      exclude_bad_models: true
+      min_performance_threshold: 0.4
+    model_scoring:
+      market_regime_detection:
+        # 是否启用技术特征提取
+        enabled: true
+        detection_method: clustering
+        n_regimes: 5
+
+# ==================== 特征配置 ====================
+        features:
+        - volatility
+        - trend_strength
+        - volume_profile
+        update_frequency: weekly
+      market_regime_adjustments:
+        stable_trend:
+          arima: 0.6
+
+# ==================== SARIMA模型配置 ====================
+          sarima: 0.5
+          lstm: 0.3
+
+# ==================== XGBoost模型配置 ====================
+          xgboost: 0.4
+
+# ==================== GARCH模型配置 ====================
+          garch: 0.2
+          kalman_filter: 0.5
+        high_volatility:
+
+# ==================== GARCH模型配置 ====================
+          garch: 1.0
+
+# ==================== XGBoost模型配置 ====================
+          xgboost: 0.5
+          var: 0.6
+          monte_carlo: 0.5
+          lstm: 0.3
+        high_volatility_nonlinear:
+
+# ==================== XGBoost模型配置 ====================
+          xgboost: 1.0
+          lstm: 0.9
+
+# ==================== GARCH模型配置 ====================
+          garch: 0.6
+
+# ==================== 多因子模型配置 ====================
+          multi_factor: 0.4
+        trending:
+          arima: 0.7
+
+# ==================== SARIMA模型配置 ====================
+          sarima: 0.6
+          kalman_filter: 0.5
+          lstm: 0.4
+        high_autocorrelation:
+          arima: 0.8
+
+# ==================== SARIMA模型配置 ====================
+          sarima: 0.7
+          lstm: 0.4
+          var: 0.5
+        default:
+
+# ==================== XGBoost模型配置 ====================
+          xgboost: 0.5
+          arima: 0.3
+          lstm: 0.3
+
+# ==================== GARCH模型配置 ====================
+          garch: 0.2
+
+# ==================== 多因子模型配置 ====================
+          multi_factor: 0.4
+      selected_model_count: 4
+      min_model_count: 2
+      confidence_threshold: 0.65
+      weighting_method: softmax
+      temperature: 0.5
+      ensemble_method: weighted_average
+      correlation_penalty: true
+      max_correlation: 0.8
+
+# ==================== 误差校正配置 ====================
+  correction:
+    error_correction:
+      # 是否启用技术特征提取
+      enabled: true
+      window_size: 50
+      correction_strength: 0.7
+      method: moving_average
+      adaptive_correction: true
+      max_correction_factor: 2.0
+
+# ==================== 概率预测配置 ====================
+  probabilistic:
+    uncertainty_quantification:
+      # 是否启用技术特征提取
+      enabled: true
+      n_samples: 2000
+      confidence_levels:
+      - 0.68
+      - 0.95
+      - 0.99
+      distribution: normal
+      distribution_options:
+      - normal
+      - t
+      - skewed_normal
+      interval_method: quantile
+      bayesian_inference: false
+      mcmc_samples: 1000
+
+# ==================== 监控配置 ====================
+  monitoring:
+    accuracy_tracking:
+      # 是否启用技术特征提取
+      enabled: true
+      evaluation_frequency: daily
+      metrics_to_track:
+      - mae
+      - mse
+      - direction_accuracy
+      - volatility_accuracy
+      rolling_window: 20
+      alert_threshold: 0.2
+    ab_testing:
+      # 是否启用技术特征提取
+      enabled: true
+      test_period: 30
+      control_group_size: 0.5
+      metrics_for_comparison:
+      - returns
+      - sharpe_ratio
+      - max_drawdown
+      statistical_significance: 0.05
+
+# ==================== 模拟器配置 ====================
+  simulator:
+    # 是否使用确定性模式（True为可重复结果）
+    deterministic_mode: true
+    # 随机种子，确保结果可重复
+    random_seed: 42
+    # 模拟天数
+    simulation_days: 20
+    garch_volatility_persistence: 0.9
+    multi_factor_n_features: 10
+    xgboost_n_features: 13
+    high_volatility_threshold: 0.04
+    low_volatility_threshold: 0.015
+    strong_trend_threshold: 0.3
+    stable_trend_volatility_threshold: 0.02
+    rsi_oversold_threshold: 30.0
+    rsi_overbought_threshold: 70.0
+    rsi_normal_min: 30.0
+    rsi_normal_max: 70.0
+    technical_score_high_threshold: 0.7
+    technical_score_low_threshold: 0.3
+    technical_score_neutral: 0.5
+    market_adaptation_boost: 1.2
+    high_vol_garch_boost: 1.3
+    low_vol_sarima_boost: 1.2
+    high_tech_xgboost_boost: 1.1
+    max_daily_return_limit: 0.08
+    volatility_multiplier: 2.5
+    deterministic_noise_scale_low: 0.3
+    deterministic_noise_scale_medium: 0.5
+    deterministic_noise_scale_high: 0.7
+    trend_adjustment_factor: 0.1
+    daily_return_min: -0.1
+    daily_return_max: 0.08
+    price_range_min: 0.3
+    price_range_max: 3.0
+    bullish_candle_range_multiplier: 1.5
+    bearish_candle_range_multiplier: 2.5
+    min_candle_range_ratio: 0.01
+    bullish_high_ratio: 0.1
+    bullish_low_ratio: 0.15
+    bearish_high_ratio: 0.15
+    bearish_low_ratio: 0.1
+    base_volume_multiplier_high: 8.0
+    base_volume_multiplier_medium: 5.0
+    base_volume_multiplier_low: 3.0
+    volume_noise_mean: 1.0
+    volume_noise_std: 0.2
+    # 成交量最小比例阈值
+    volume_min_ratio: 0.3
+    volume_max_ratio: 3.0
+    tech_weight_max: 0.8
+    random_weight_min: 0.2
+    max_allowed_daily_return: 0.15
+    price_change_sanity_check_min: 0.3
+    price_change_sanity_check_max: 3.0
+    confidence_cap: 0.95
+    direction_accuracy_boost: 1.1
+    technical_score_boost_threshold: 0.6
+    trend_strength_boost_threshold: 0.3
+    trend_strength_boost_factor: 1.08
+    technical_score_boost_factor: 1.05
+    regime_high_volatility_nonlinear_vol_threshold: 0.04
+    regime_high_volatility_vol_threshold: 0.04
+    regime_trending_trend_threshold: 0.7
+    regime_stable_trend_vol_threshold: 0.02
+    regime_low_volatility_vol_threshold: 0.015
+    regime_low_volatility_return_threshold: 0.001
+    normal_std_factor: 1.0
+    beta_alpha: 3
+    beta_beta: 2
+    open_gap_multiplier: 0.3
+    max_daily_change: 0.1
+    atr_period: 14
+    kline_body_ratio: 0.6
+    kline_upper_ratio: 0.2
+    kline_lower_ratio: 0.2
+    volume_noise_factor: 0.2
+    market_vol_multiplier_high: 1.5
+    market_vol_multiplier_stable: 0.8
+    min_volatility: 0.005
+    reverse_kline: true
+    reverse_strength: 0.3
+    reverse_probability: 0.4
+    max_reverse_days: 15
+    max_allowed_volatility: 0.5
+    min_price_range: 0.8
+    return_correction_factor: 0.7
+    min_return_threshold: 0.001
+    price_match_adjustment: 0.05
+    xgboost_feature_correction: true
+    xgboost_return_boost: 1.2
+    multi_factor_vol_scale: 0.8
+    asymmetry_factor: 0.3
+
+# ==================== 报告配置 ====================
+  reporting:
+    output_format: html
+    auto_open_html: true
+    save_path: results
+    timestamp_format: '%Y%m%d_%H%M%S'
+
+# ==================== SARIMA模型配置 ====================
+  sarima:
+    # 模型基础评分，用于模型权重分配
+    base_score: 6.0
+    # 是否启用技术特征提取
+    enabled: true
+    order:
+    - 1
+    - 0
+    - 0
+    seasonal_order:
+    - 0
+    - 0
+    - 0
+    - 0
+    window_size: 100
+    prediction_horizon: 5
+    weight_strategy: equal
+    p: 1
+    d: 0
+    q: 0
+
+# ==================== GARCH模型配置 ====================
+  garch:
+    # 模型基础评分，用于模型权重分配
+    base_score: 6.0
+    # 是否启用技术特征提取
+    enabled: true
+    order:
+    - 2
+    - 1
+    p: 2
+    q: 1
+    window_size: 100
+    prediction_horizon: 5
+    weight_strategy: equal
+    distribution: normal
+
+# ==================== XGBoost模型配置 ====================
+  xgboost:
+    # 模型基础评分，用于模型权重分配
+    base_score: 6.0
+    # 是否启用技术特征提取
+    enabled: true
+    n_estimators: 100
+    max_depth: 5
+    learning_rate: 0.1
+    n_features: 13
+    window_size: 100
+    prediction_horizon: 5
+    weight_strategy: equal
+
+# ==================== 多因子模型配置 ====================
+  multi_factor:
+    # 模型基础评分，用于模型权重分配
+    base_score: 6.0
+    # 是否启用技术特征提取
+    enabled: true
+    n_features: 15
+    window_size: 100
+    prediction_horizon: 5
+    weight_strategy: equal
+
+# ==================== 技术特征配置 ====================
+  technical_features:
+    # 是否启用技术特征提取
+    enabled: true
+    # 是否包含技术指标
+    include_indicators: true
+    # 是否包含金三角指标
+    include_golden_triangle: true
+    # 是否包含KDJ指标
+    include_kdj: true
+    # 是否包含正态分布分析
+    include_normality: true
+    # 是否包含成交量分析
+    include_volume_analysis: true
+    # 是否返回DataFrame格式
+    return_dataframe: true
+    golden_triangle:
+      # 金三角短期均线周期
+      short_period: 5
+      # 金三角中期均线周期
+      medium_period: 10
+      # 金三角长期均线周期
+      long_period: 20
+      # 金三角模式识别窗口
+      window: 10
+      # 金三角超买阈值
+      overbought_threshold: 80
+      # 金三角超卖阈值
+      oversold_threshold: 20
+      # 金三角极端超买阈值
+      extreme_overbought_threshold: 90
+      # 金三角极端超卖阈值
+      extreme_oversold_threshold: 10
+      # 金三角背离检测回溯周期
+      lookback_period: 20
+      # 金三角趋势强度计算窗口
+      strength_window: 20
+      # 金三角发散度计算窗口
+      divergence_window: 10
+    kdj:
+      # KDJ的RSV计算周期
+      n: 9
+      # KDJ的K值平滑周期
+      m1: 3
+      # KDJ的D值平滑周期
+      m2: 3
+      # 金三角超买阈值
+      overbought_threshold: 80
+      # 金三角超卖阈值
+      oversold_threshold: 20
+      # 金三角极端超买阈值
+      extreme_overbought_threshold: 90
+      # 金三角极端超卖阈值
+      extreme_oversold_threshold: 10
+      # 金三角背离检测回溯周期
+      lookback_period: 20
+      volatility_window: 20
+      position_window: 50
+      trend_window: 20
+      pattern_window: 10
+    normality:
+      # Jarque-Bera正态性检验最小样本数
+      jarque_bera_min_samples: 4
+      # Shapiro-Wilk正态性检验最小样本数
+      shapiro_wilk_min_samples: 3
+      # Shapiro-Wilk正态性检验最大样本数
+      shapiro_wilk_max_samples: 5000
+      # 正常偏度阈值
+      normal_skewness_threshold: 0.5
+      # 正常峰度阈值
+      normal_kurtosis_threshold: 1.0
+      # Q-Q图分位数数量
+      qq_quantiles: 100
+      deviation_z_scores:
+      - 1
+      - 2
+      - 3
+      # 厚尾判断阈值
+      fat_tail_threshold: -0.01
+      # 薄尾判断阈值
+      thin_tail_threshold: 0.01
+      # 滚动正态性分析窗口
+      normality_window: 20
+    volume_analysis:
+      # 高量柱检测周期
+      high_volume_period: 1500
+      # 量比计算均线周期
+      volume_ma_period: 5
+      # 获利盘比例计算窗口
+      winner_window: 20
+      ma_periods:
+      - 20
+      - 60
+      - 120
+      # 成交量翻倍阈值
+      volume_double_threshold: 2.0
+      # 成交量萎缩阈值
+      volume_shrink_threshold: 0.5
+      # 成交量最小比例阈值
+      volume_min_ratio: 0.02
+      volume_category_thresholds:
+        严重缩量:
+        - 0.001
+        - 0.5
+        缩量:
+        - 0.5
+        - 0.8
+        正常量比:
+        - 0.8
+        - 1.5
+        温和放量:
+        - 1.5
+        - 2.5
+        明显放量:
+        - 2.5
+        - 5.0
+        剧烈放量:
+        - 5.0
+        - 10.0
+        反向操作:
+        - 10.0
+        - .inf
+    indicators:
+      # RSI计算周期
+      rsi_period: 14
+      # MACD快速移动平均周期
+      macd_fast: 12
+      # MACD慢速移动平均周期
+      macd_slow: 26
+      # MACD信号线周期
+      macd_signal: 9
+      # 布林带窗口大小
+      bollinger_window: 20
+      # 布林带标准差倍数
+      bollinger_num_std: 2
+      # 4日成交量均线
+      volume_ma_4: 4
+      # 11日成交量均线
+      volume_ma_11: 11
+      # 117日成交量均线
+      volume_ma_117: 117

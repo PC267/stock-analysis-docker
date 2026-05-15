@@ -1,0 +1,16 @@
+FROM python:3.11-bookworm
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DEFAULT_TIMEOUT=120 \
+    MPLBACKEND=Agg \
+    DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 libgfortran5 fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /work
+COPY app/requirements.txt /tmp/requirements.txt
+RUN python -m pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
+    python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/requirements.txt
+COPY . /work
+EXPOSE 9119
+CMD ["python", "web_stock_picker/app.py"]

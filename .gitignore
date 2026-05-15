@@ -1,0 +1,13 @@
+.idea/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+app/venv/
+app/**/__pycache__/
+web_stock_picker/__pycache__/
+web_stock_picker/ai_job_*.log
+web_stock_picker/ai_runner_*.py
+app/catboost_info/
+app/stock_data/*.csv
+app/results/reports/
+app/backtest_results/

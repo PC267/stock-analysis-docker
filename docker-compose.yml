@@ -1,0 +1,24 @@
+services:
+  web-stock-picker:
+    build:
+      context: .
+      dockerfile: web_stock_picker/Dockerfile.full
+    image: web-stock-picker-full:latest
+    container_name: web-stock-picker
+    restart: unless-stopped
+    ports:
+      - "9119:9119"
+    environment:
+      WEB_STOCK_PICKER_PORT: "9119"
+      REPORT_OUTPUT_DIR: /work/app/results/reports
+    volumes:
+      - ./app/stock_data:/work/app/stock_data
+      - ./app/results:/work/app/results
+      - ./app/backtest_results:/work/app/backtest_results
+      - ./web_stock_picker:/work/web_stock_picker
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9119/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
