@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Web 选股系统</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Web 选股系统</h1>
+      <p>基于本地 baostock 历史行情 CSV 的轻量实时选股</p>
+    </header>
+    <section class="toolbar">
+      <select id="strategy">
+        <option value="balanced">综合评分</option>
+        <option value="momentum">趋势动量</option>
+        <option value="volume_breakout">放量突破</option>
+        <option value="oversold">超跌修复</option>
+      </select>
+      <input id="keyword" placeholder="股票代码/名称">
+      <input id="limit" type="number" value="50" min="1" max="500">
+      <button id="refresh">刷新</button>
+      <span id="status"></span>
+    </section>
+    <div class="tablebox">
+      <table>
+        <thead>
+          <tr>
+            <th>排名</th><th>代码</th><th>名称</th><th>信号</th><th>评分</th><th>最新价</th><th>涨跌幅</th><th>MA5/20/60</th><th>RSI</th><th>量比</th><th>20日动量</th><th>最大回撤</th><th>标签</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
