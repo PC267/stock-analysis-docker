@@ -17,3 +17,5 @@ app/backtest_results/
 !app/results/.gitkeep
 !app/results/reports/.gitkeep
 !app/backtest_results/.gitkeep
+runtime/jobs/
+*.log
