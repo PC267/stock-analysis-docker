@@ -13,6 +13,7 @@ services:
       REPORT_OUTPUT_DIR: /work/app/results/reports
     volumes:
       - ./app/stock_data:/work/app/stock_data
+      - ./app/model:/work/app/model
       - ./app/results:/work/app/results
       - ./app/backtest_results:/work/app/backtest_results
       - ./web_stock_picker:/work/web_stock_picker
