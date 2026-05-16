@@ -11,3 +11,9 @@ app/catboost_info/
 app/stock_data/*.csv
 app/results/reports/
 app/backtest_results/
+
+# keep runtime placeholder directories
+!app/stock_data/.gitkeep
+!app/results/.gitkeep
+!app/results/reports/.gitkeep
+!app/backtest_results/.gitkeep

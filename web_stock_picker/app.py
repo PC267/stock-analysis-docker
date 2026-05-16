@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import csv, json, math, os, re, urllib.request, urllib.parse, subprocess, uuid, threading, time, sys, mimetypes, io, zipfile
+import csv, json, math, os, re, urllib.request, urllib.parse, subprocess, uuid, threading, time, sys, mimetypes, io, zipfile, importlib.util, contextlib
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from statistics import pstdev
@@ -11,11 +11,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / 'app' / 'stock_data'
 PORT = int(os.environ.get('WEB_STOCK_PICKER_PORT', '9119'))
 
-INDEX_HTML = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Web选股系统</title><link rel="stylesheet" href="/static/style.css"></head><body><div class="wrap"><header><h1>Web选股系统</h1><p>选股 / 回测 / 重型AI训练 / 报告</p></header><nav class="tabs"><button data-tab="picker" class="active">选股评分</button><button data-tab="backtest">回测</button><button data-tab="heavyai">重型AI训练</button><button data-tab="reports">报告结果</button></nav><section id="picker" class="panel active"><div class="toolbar"><select id="strategy"><option value="balanced">综合评分</option><option value="momentum">趋势动量</option><option value="volume_breakout">放量突破</option><option value="oversold">超跌修复</option></select><input id="keyword" placeholder="股票代码/名称"><input id="limit" type="number" value="50"><button id="refresh">刷新</button><button id="downloadHistory">更新历史数据</button><span id="status"></span></div><div class="tablebox"><table><thead><tr><th data-sort="rank">排名 <span class="sort-arrows"><button onclick="sortStocks('rank','asc')">&#9650;</button><button onclick="sortStocks('rank','desc')">&#9660;</button></span></th><th data-sort="code">代码 <span class="sort-arrows"><button onclick="sortStocks('code','asc')">&#9650;</button><button onclick="sortStocks('code','desc')">&#9660;</button></span></th><th data-sort="name">名称 <span class="sort-arrows"><button onclick="sortStocks('name','asc')">&#9650;</button><button onclick="sortStocks('name','desc')">&#9660;</button></span></th><th data-sort="signal">信号 <span class="sort-arrows"><button onclick="sortStocks('signal','asc')">&#9650;</button><button onclick="sortStocks('signal','desc')">&#9660;</button></span></th><th data-sort="score">评分 <span class="sort-arrows"><button onclick="sortStocks('score','asc')">&#9650;</button><button onclick="sortStocks('score','desc')">&#9660;</button></span></th><th data-sort="price">最新价 <span class="sort-arrows"><button onclick="sortStocks('price','asc')">&#9650;</button><button onclick="sortStocks('price','desc')">&#9660;</button></span></th><th data-sort="change_pct">涨跌幅 <span class="sort-arrows"><button onclick="sortStocks('change_pct','asc')">&#9650;</button><button onclick="sortStocks('change_pct','desc')">&#9660;</button></span></th><th data-sort="ma">MA5/20/60 <span class="sort-arrows"><button onclick="sortStocks('ma','asc')">&#9650;</button><button onclick="sortStocks('ma','desc')">&#9660;</button></span></th><th data-sort="rsi14">RSI <span class="sort-arrows"><button onclick="sortStocks('rsi14','asc')">&#9650;</button><button onclick="sortStocks('rsi14','desc')">&#9660;</button></span></th><th data-sort="volume_ratio">量比 <span class="sort-arrows"><button onclick="sortStocks('volume_ratio','asc')">&#9650;</button><button onclick="sortStocks('volume_ratio','desc')">&#9660;</button></span></th><th data-sort="momentum20">20日动量 <span class="sort-arrows"><button onclick="sortStocks('momentum20','asc')">&#9650;</button><button onclick="sortStocks('momentum20','desc')">&#9660;</button></span></th><th data-sort="drawdown">最大回撤 <span class="sort-arrows"><button onclick="sortStocks('drawdown','asc')">&#9650;</button><button onclick="sortStocks('drawdown','desc')">&#9660;</button></span></th><th data-sort="kline_score">K线模拟 <span class="sort-arrows"><button onclick="sortStocks('kline_score','asc')">&#9650;</button><button onclick="sortStocks('kline_score','desc')">&#9660;</button></span></th><th data-sort="data_source">数据源 <span class="sort-arrows"><button onclick="sortStocks('data_source','asc')">&#9650;</button><button onclick="sortStocks('data_source','desc')">&#9660;</button></span></th><th data-sort="tags">标签 <span class="sort-arrows"><button onclick="sortStocks('tags','asc')">&#9650;</button><button onclick="sortStocks('tags','desc')">&#9660;</button></span></th></tr></thead><tbody id="tbody"></tbody></table></div></section><section id="backtest" class="panel"><h2>回测模块</h2><div class="toolbar"><input id="backtestCode" placeholder="股票代码，可留空"><input id="backtestDays" type="number" value="20"><button id="backtestRun">运行轻量回测</button></div><pre id="backtestResult" class="result"></pre></section><section id="heavyai" class="panel"><h2>重型AI训练</h2><div class="toolbar"><input id="aiCode" placeholder="股票代码"><input id="aiName" placeholder="股票名称，可留空"><input id="aiDays" type="number" value="20"><select id="aiMode"><option value="single">单股训练</option><option value="industry_5d">行业资金5日流入前三</option><option value="industry_10d">行业资金10日流入前三</option></select><input id="aiLimit" type="number" value="3" title="每个行业训练股票数"><button id="aiRun">启动完整多模型训练</button><button id="aiStatusBtn">刷新状态</button></div><pre id="aiResult" class="result"></pre></section><section id="reports" class="panel"><h2>报告结果</h2><div class="toolbar"><button id="reportsLoad">刷新报告列表</button><span id="reportsStatus"></span></div><div class="tablebox report-tablebox"><table class="report-table"><thead><tr><th data-sort="idx">序号 <span class="sort-arrows"><button onclick="sortReports('idx','asc')">&#9650;</button><button onclick="sortReports('idx','desc')">&#9660;</button></span></th><th data-sort="name">报告名称 <span class="sort-arrows"><button onclick="sortReports('name','asc')">&#9650;</button><button onclick="sortReports('name','desc')">&#9660;</button></span></th><th data-sort="risk_level">风险等级 <span class="sort-arrows"><button onclick="sortReports('risk_level','asc')">&#9650;</button><button onclick="sortReports('risk_level','desc')">&#9660;</button></span></th><th data-sort="risk_score">风险评分 <span class="sort-arrows"><button onclick="sortReports('risk_score','asc')">&#9650;</button><button onclick="sortReports('risk_score','desc')">&#9660;</button></span></th><th data-sort="volatility">波动率 <span class="sort-arrows"><button onclick="sortReports('volatility','asc')">&#9650;</button><button onclick="sortReports('volatility','desc')">&#9660;</button></span></th><th data-sort="max_drawdown">最大回撤 <span class="sort-arrows"><button onclick="sortReports('max_drawdown','asc')">&#9650;</button><button onclick="sortReports('max_drawdown','desc')">&#9660;</button></span></th><th data-sort="sharpe">夏普比率 <span class="sort-arrows"><button onclick="sortReports('sharpe','asc')">&#9650;</button><button onclick="sortReports('sharpe','desc')">&#9660;</button></span></th><th data-sort="win_rate">胜率 <span class="sort-arrows"><button onclick="sortReports('win_rate','asc')">&#9650;</button><button onclick="sortReports('win_rate','desc')">&#9660;</button></span></th><th>操作</th><th data-sort="mtime">修改时间 <span class="sort-arrows"><button onclick="sortReports('mtime','asc')">&#9650;</button><button onclick="sortReports('mtime','desc')">&#9660;</button></span></th><th data-sort="advice">分析建议 <span class="sort-arrows"><button onclick="sortReports('advice','asc')">&#9650;</button><button onclick="sortReports('advice','desc')">&#9660;</button></span></th></tr></thead><tbody id="reportsBox"></tbody></table></div></section></div><script src="/static/app.js"></script></body></html>'''
+INDEX_HTML = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Web选股系统</title><link rel="stylesheet" href="/static/style.css"></head><body><div class="wrap"><header><h1>Web选股系统</h1><p>选股 / 回测 / 重型AI训练 / 报告</p></header><nav class="tabs"><button data-tab="picker" class="active">选股评分</button><button data-tab="backtest">回测</button><button data-tab="heavyai">重型AI训练</button><button data-tab="reports">报告结果</button></nav><section id="picker" class="panel active"><div class="toolbar"><select id="strategy"><option value="balanced">综合评分</option><option value="momentum">趋势动量</option><option value="volume_breakout">放量突破</option><option value="oversold">超跌修复</option></select><input id="keyword" placeholder="股票代码/名称"><input id="limit" type="number" value="50"><button id="refresh">刷新</button><button id="downloadHistory">更新历史数据</button><span id="status"></span></div><div class="tablebox"><table><thead><tr><th data-sort="rank">排名 <span class="sort-arrows"><button onclick="sortStocks('rank','asc')">&#9650;</button><button onclick="sortStocks('rank','desc')">&#9660;</button></span></th><th data-sort="code">代码 <span class="sort-arrows"><button onclick="sortStocks('code','asc')">&#9650;</button><button onclick="sortStocks('code','desc')">&#9660;</button></span></th><th data-sort="name">名称 <span class="sort-arrows"><button onclick="sortStocks('name','asc')">&#9650;</button><button onclick="sortStocks('name','desc')">&#9660;</button></span></th><th data-sort="signal">信号 <span class="sort-arrows"><button onclick="sortStocks('signal','asc')">&#9650;</button><button onclick="sortStocks('signal','desc')">&#9660;</button></span></th><th data-sort="score">评分 <span class="sort-arrows"><button onclick="sortStocks('score','asc')">&#9650;</button><button onclick="sortStocks('score','desc')">&#9660;</button></span></th><th data-sort="price">最新价 <span class="sort-arrows"><button onclick="sortStocks('price','asc')">&#9650;</button><button onclick="sortStocks('price','desc')">&#9660;</button></span></th><th data-sort="change_pct">涨跌幅 <span class="sort-arrows"><button onclick="sortStocks('change_pct','asc')">&#9650;</button><button onclick="sortStocks('change_pct','desc')">&#9660;</button></span></th><th data-sort="ma">MA5/20/60 <span class="sort-arrows"><button onclick="sortStocks('ma','asc')">&#9650;</button><button onclick="sortStocks('ma','desc')">&#9660;</button></span></th><th data-sort="rsi14">RSI <span class="sort-arrows"><button onclick="sortStocks('rsi14','asc')">&#9650;</button><button onclick="sortStocks('rsi14','desc')">&#9660;</button></span></th><th data-sort="volume_ratio">量比 <span class="sort-arrows"><button onclick="sortStocks('volume_ratio','asc')">&#9650;</button><button onclick="sortStocks('volume_ratio','desc')">&#9660;</button></span></th><th data-sort="momentum20">20日动量 <span class="sort-arrows"><button onclick="sortStocks('momentum20','asc')">&#9650;</button><button onclick="sortStocks('momentum20','desc')">&#9660;</button></span></th><th data-sort="drawdown">最大回撤 <span class="sort-arrows"><button onclick="sortStocks('drawdown','asc')">&#9650;</button><button onclick="sortStocks('drawdown','desc')">&#9660;</button></span></th><th data-sort="kline_score">K线模拟 <span class="sort-arrows"><button onclick="sortStocks('kline_score','asc')">&#9650;</button><button onclick="sortStocks('kline_score','desc')">&#9660;</button></span></th><th>操作</th><th data-sort="data_source">数据源 <span class="sort-arrows"><button onclick="sortStocks('data_source','asc')">&#9650;</button><button onclick="sortStocks('data_source','desc')">&#9660;</button></span></th><th data-sort="tags">标签 <span class="sort-arrows"><button onclick="sortStocks('tags','asc')">&#9650;</button><button onclick="sortStocks('tags','desc')">&#9660;</button></span></th></tr></thead><tbody id="tbody"></tbody></table></div></section><section id="backtest" class="panel"><h2>回测模块</h2><div class="toolbar"><input id="backtestCode" placeholder="股票代码，可留空"><input id="backtestDays" type="number" value="20"><button id="backtestRun">运行 backtest.py 回测</button></div><pre id="backtestResult" class="result"></pre></section><section id="heavyai" class="panel"><h2>重型AI训练</h2><div class="toolbar"><input id="aiCode" placeholder="股票代码"><input id="aiName" placeholder="股票名称，可留空"><input id="aiDays" type="number" value="20"><select id="aiMode"><option value="single">单股训练</option><option value="industry_5d">行业资金5日流入前三</option><option value="industry_10d">行业资金10日流入前三</option></select><input id="aiLimit" type="number" value="3" title="每个行业训练股票数"><button id="aiRun">启动完整多模型训练</button><button id="aiStatusBtn">刷新状态</button></div><pre id="aiResult" class="result"></pre></section><section id="reports" class="panel"><h2>报告结果</h2><div class="toolbar"><button id="reportsLoad">刷新报告列表</button><span id="reportsStatus"></span></div><div class="tablebox report-tablebox"><table class="report-table"><thead><tr><th data-sort="idx">序号 <span class="sort-arrows"><button onclick="sortReports('idx','asc')">&#9650;</button><button onclick="sortReports('idx','desc')">&#9660;</button></span></th><th data-sort="name">报告名称 <span class="sort-arrows"><button onclick="sortReports('name','asc')">&#9650;</button><button onclick="sortReports('name','desc')">&#9660;</button></span></th><th data-sort="risk_level">风险等级 <span class="sort-arrows"><button onclick="sortReports('risk_level','asc')">&#9650;</button><button onclick="sortReports('risk_level','desc')">&#9660;</button></span></th><th data-sort="risk_score">风险评分 <span class="sort-arrows"><button onclick="sortReports('risk_score','asc')">&#9650;</button><button onclick="sortReports('risk_score','desc')">&#9660;</button></span></th><th data-sort="volatility">波动率 <span class="sort-arrows"><button onclick="sortReports('volatility','asc')">&#9650;</button><button onclick="sortReports('volatility','desc')">&#9660;</button></span></th><th data-sort="max_drawdown">Total Return <span class="sort-arrows"><button onclick="sortReports('max_drawdown','asc')">&#9650;</button><button onclick="sortReports('max_drawdown','desc')">&#9660;</button></span></th><th data-sort="sharpe">夏普比率 <span class="sort-arrows"><button onclick="sortReports('sharpe','asc')">&#9650;</button><button onclick="sortReports('sharpe','desc')">&#9660;</button></span></th><th data-sort="win_rate">胜率 <span class="sort-arrows"><button onclick="sortReports('win_rate','asc')">&#9650;</button><button onclick="sortReports('win_rate','desc')">&#9660;</button></span></th><th>操作</th><th data-sort="mtime">修改时间 <span class="sort-arrows"><button onclick="sortReports('mtime','asc')">&#9650;</button><button onclick="sortReports('mtime','desc')">&#9660;</button></span></th><th data-sort="advice">分析建议 <span class="sort-arrows"><button onclick="sortReports('advice','asc')">&#9650;</button><button onclick="sortReports('advice','desc')">&#9660;</button></span></th></tr></thead><tbody id="reportsBox"></tbody></table></div></section></div><script src="/static/app.js"></script></body></html>'''
 APP_JS = '''function q(id){return document.getElementById(id)}document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tabs button,.panel').forEach(x=>x.classList.remove('active'));b.classList.add('active');q(b.dataset.tab).classList.add('active')});async function gj(u){return await (await fetch(u)).json()}async function pj(u,o){return await (await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)})).json()}
-let stockItems=[];let stockSort={key:'rank',dir:'asc'};function stockSortValue(x,k){if(k==='ma')return Number(x.ma20??-999999);if(k==='tags')return (x.tags||[]).join(',');if(['rank','score','price','change_pct','rsi14','volume_ratio','momentum20','drawdown','kline_score'].includes(k))return Number(x[k]??-999999);if(k==='data_source')return x.data_fresh?'实时':'CSV';return String(x[k]??'')}function sortStocks(k,d){stockSort={key:k,dir:d};renderStocks()}function renderStocks(){let arr=[...stockItems];arr.sort((a,b)=>{let av=stockSortValue(a,stockSort.key),bv=stockSortValue(b,stockSort.key);let r=(typeof av==='number'&&typeof bv==='number')?av-bv:String(av).localeCompare(String(bv),'zh-CN');return stockSort.dir==='asc'?r:-r});let tb=q('tbody');tb.innerHTML='';for(let i=0;i<arr.length;i++){let x=arr[i],tr=document.createElement('tr');tr.innerHTML=`<td>${i+1}</td><td class="code">${x.code}</td><td>${x.name}</td><td><span class="sig">${x.signal}</span></td><td class="score">${x.score}</td><td>${x.price}</td><td class="${x.change_pct>=0?'red':'green'}">${x.change_pct}%</td><td>${x.ma5??'-'} / ${x.ma20??'-'} / ${x.ma60??'-'}</td><td>${x.rsi14??'-'}</td><td>${x.volume_ratio??'-'}</td><td>${x.momentum20??'-'}%</td><td>${x.drawdown??'-'}%</td><td>${x.kline_score??'-'} / ${x.sim_return??'-'}%</td><td>${x.data_fresh?'实时':'CSV'}</td><td>${(x.tags||[]).map(t=>`<span class="tag">${t}</span>`).join('')}</td>`;tb.appendChild(tr)}}async function loadStocks(){let s=q('strategy').value,k=q('keyword').value,l=q('limit').value||50;q('status').textContent='加载中...';let d=await gj(`/api/stocks?strategy=${s}&limit=${l}&keyword=${encodeURIComponent(k)}`);stockItems=d.items||[];renderStocks();q('status').textContent=`${d.updated_at} · ${d.count}只 · 排序 ${stockSort.key} ${stockSort.dir==='asc'?'↑':'↓'}`}q('refresh').onclick=loadStocks;q('downloadHistory').onclick=async()=>{let k=q('keyword').value.trim();if(!k&&!confirm('未输入股票代码/名称，将更新全部CSV，可能耗时较长，继续？'))return;q('status').textContent='历史数据更新中...';try{let d=await pj('/api/history/update',{keyword:k});q('status').textContent=`更新完成：${d.updated} 个，失败 ${d.failed}`;await loadStocks()}catch(e){q('status').textContent='更新失败：'+e}};q('strategy').onchange=loadStocks;q('keyword').onkeydown=e=>{if(e.key==='Enter')loadStocks()};
+let stockItems=[];let stockSort={key:'rank',dir:'asc'};function stockSortValue(x,k){if(k==='ma')return Number(x.ma20??-999999);if(k==='tags')return (x.tags||[]).join(',');if(['rank','score','price','change_pct','rsi14','volume_ratio','momentum20','drawdown','kline_score'].includes(k))return Number(x[k]??-999999);if(k==='data_source')return x.data_fresh?'实时':'CSV';return String(x[k]??'')}function sortStocks(k,d){stockSort={key:k,dir:d};renderStocks()}function renderStocks(){let arr=[...stockItems];arr.sort((a,b)=>{let av=stockSortValue(a,stockSort.key),bv=stockSortValue(b,stockSort.key);let r=(typeof av==='number'&&typeof bv==='number')?av-bv:String(av).localeCompare(String(bv),'zh-CN');return stockSort.dir==='asc'?r:-r});let tb=q('tbody');tb.innerHTML='';for(let i=0;i<arr.length;i++){let x=arr[i],tr=document.createElement('tr');tr.innerHTML=`<td>${i+1}</td><td class="code">${x.code}</td><td>${x.name}</td><td><span class="sig">${x.signal}</span></td><td class="score">${x.score}</td><td>${x.price}</td><td class="${x.change_pct>=0?'red':'green'}">${x.change_pct}%</td><td>${x.ma5??'-'} / ${x.ma20??'-'} / ${x.ma60??'-'}</td><td>${x.rsi14??'-'}</td><td>${x.volume_ratio??'-'}</td><td>${x.momentum20??'-'}%</td><td>${x.drawdown??'-'}%</td><td>${x.kline_score??'-'} / ${x.sim_return??'-'}%</td><td><button class="danger" onclick="deleteStock('${x.code}','${(x.name||'').replace(/'/g,\"\\'\")}')">删除</button></td><td>${x.data_fresh?'实时':'CSV'}</td><td>${(x.tags||[]).map(t=>`<span class="tag">${t}</span>`).join('')}</td>`;tb.appendChild(tr)}}async function deleteStock(code,name){if(!confirm('确认删除个股：'+code+' '+name+' ?'))return;let r=await fetch('/api/stocks/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});let d=await r.json();if(!d.ok){alert(d.error||'删除失败');return}await loadStocks()}async function loadStocks(){let s=q('strategy').value,k=q('keyword').value,l=q('limit').value||50;q('status').textContent='加载中...';let d=await gj(`/api/stocks?strategy=${s}&limit=${l}&keyword=${encodeURIComponent(k)}`);stockItems=d.items||[];renderStocks();q('status').textContent=`${d.updated_at} · ${d.count}只 · 排序 ${stockSort.key} ${stockSort.dir==='asc'?'↑':'↓'}`}q('refresh').onclick=loadStocks;q('downloadHistory').onclick=async()=>{let k=q('keyword').value.trim();if(!k&&!confirm('未输入股票代码/名称，将更新全部CSV，可能耗时较长，继续？'))return;q('status').textContent='历史数据更新中...';try{let d=await pj('/api/history/update',{keyword:k});q('status').textContent=`更新完成：${d.updated} 个，失败 ${d.failed}`;await loadStocks()}catch(e){q('status').textContent='更新失败：'+e}};q('strategy').onchange=loadStocks;q('keyword').onkeydown=e=>{if(e.key==='Enter')loadStocks()};
 q('backtestRun').onclick=async()=>q('backtestResult').textContent=JSON.stringify(await pj('/api/backtest',{code:q('backtestCode').value.trim(),days:q('backtestDays').value}),null,2);let lastJob='';q('aiRun').onclick=async()=>{q('aiResult').textContent='启动中...';let d=await pj('/api/ai/train',{code:q('aiCode').value.trim(),name:q('aiName').value,days:q('aiDays').value,mode:q('aiMode').value,limit:q('aiLimit').value});lastJob=d.job_id||'';q('aiResult').textContent=JSON.stringify(d,null,2)};q('aiStatusBtn').onclick=async()=>{q('aiResult').textContent=JSON.stringify(await gj('/api/ai/status?job_id='+encodeURIComponent(lastJob)),null,2)};
-async function deleteReport(id,name){if(!confirm('确认删除报告：'+name+' ?'))return;let r=await fetch('/api/reports/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});let d=await r.json();if(!d.ok)alert(d.error||'删除失败');q('reportsLoad').click()}let reportItems=[];let reportSort={key:'mtime',dir:'desc'};function riskRank(v){return {'低':1,'中':2,'高':3}[v]||0}function reportSortValue(x,k){if(k==='idx')return x._idx||0;if(k==='risk_level')return riskRank(x.risk_level);if(['risk_score','volatility','max_drawdown','sharpe','win_rate'].includes(k))return Number(x[k]??-999999);return String(x[k]||'')}function sortReports(k,d){reportSort={key:k,dir:d};renderReports()}function renderReports(){let arr=[...reportItems];arr.sort((a,b)=>{let av=reportSortValue(a,reportSort.key),bv=reportSortValue(b,reportSort.key);let r=(typeof av==='number'&&typeof bv==='number')?av-bv:String(av).localeCompare(String(bv),'zh-CN');return reportSort.dir==='asc'?r:-r});let tb=q('reportsBox');tb.innerHTML=arr.map((x,i)=>{let safeName=(x.name||'').replace(/'/g,"\'");let pct=v=>v==null?'-':(Number(v).toFixed(2)+'%');let num=v=>v==null?'-':Number(v).toFixed(2);return `<tr><td>${i+1}</td><td><a class="report-name" href="${x.url}" target="_blank">${x.display_name||x.name}</a></td><td><span class="risk risk-${x.risk_level}">${x.risk_level||'-'}</span></td><td>${num(x.risk_score)}</td><td>${pct(x.volatility)}</td><td>${pct(x.max_drawdown)}</td><td>${num(x.sharpe)}</td><td>${pct(x.win_rate)}</td><td><div class="report-actions"><a class="open-report" href="${x.url}" target="_blank">打开</a><button class="danger" onclick="deleteReport('${x.id}','${safeName}')">删除</button></div></td><td>${x.mtime||''}</td><td class="advice-cell" title="${x.advice||''}">${x.advice||'-'}</td></tr>`}).join('');q('reportsStatus').textContent=`共 ${arr.length} 个报告 · 排序 ${reportSort.key} ${reportSort.dir==='asc'?'↑':'↓'}`}q('reportsLoad').onclick=async()=>{let d=await gj('/api/reports');reportItems=(d.items||[]).map((x,i)=>({...x,_idx:i+1}));renderReports()};loadStocks();'''
+async function deleteReport(id,name){if(!confirm('确认删除报告：'+name+' ?'))return;let r=await fetch('/api/reports/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});let d=await r.json();if(!d.ok)alert(d.error||'删除失败');q('reportsLoad').click()}let reportItems=[];let reportSort={key:'__default',dir:'default'};function riskRank(v){return {'低':1,'中':2,'高':3}[v]||0}function reportSortValue(x,k){if(k==='idx')return x._idx||0;if(k==='risk_level')return riskRank(x.risk_level);if(['risk_score','volatility','max_drawdown','sharpe','win_rate'].includes(k))return Number(x[k]??-999999);return String(x[k]||'')}function compareReport(a,b,k,d){let av=reportSortValue(a,k),bv=reportSortValue(b,k);let r=(typeof av==='number'&&typeof bv==='number')?av-bv:String(av).localeCompare(String(bv),'zh-CN');return d==='asc'?r:-r}function defaultReportCompare(a,b){return compareReport(a,b,'risk_level','asc')||compareReport(a,b,'sharpe','desc')||compareReport(a,b,'win_rate','desc')||compareReport(a,b,'max_drawdown','desc')||compareReport(a,b,'volatility','asc')||compareReport(a,b,'risk_score','asc')||compareReport(a,b,'mtime','desc')}function sortReports(k,d){reportSort={key:k,dir:d};renderReports()}function renderReports(){let arr=[...reportItems];arr.sort((a,b)=>reportSort.key==='__default'?defaultReportCompare(a,b):compareReport(a,b,reportSort.key,reportSort.dir));let tb=q('reportsBox');tb.innerHTML=arr.map((x,i)=>{let safeName=(x.name||'').replace(/'/g,"\'");let pct=v=>v==null?'-':(Number(v).toFixed(2)+'%');let num=v=>v==null?'-':Number(v).toFixed(2);return `<tr><td>${i+1}</td><td><a class="report-name" href="${x.url}" target="_blank">${x.display_name||x.name}</a></td><td><span class="risk risk-${x.risk_level}">${x.risk_level||'-'}</span></td><td>${num(x.risk_score)}</td><td>${pct(x.volatility)}</td><td>${pct(x.max_drawdown)}</td><td>${num(x.sharpe)}</td><td>${pct(x.win_rate)}</td><td><div class="report-actions"><a class="open-report" href="${x.url}" target="_blank">打开</a><button class="danger" onclick="deleteReport('${x.id}','${safeName}')">删除</button></div></td><td>${x.mtime||''}</td><td class="advice-cell" title="${x.advice||''}">${x.advice||'-'}</td></tr>`}).join('');q('reportsStatus').textContent=reportSort.key==='__default'?`共 ${arr.length} 个报告 · 默认排序：风险等级↑ 夏普比率↓ 胜率↓ Total Return↓ 波动率↑ 风险评分↑`:`共 ${arr.length} 个报告 · 排序 ${reportSort.key} ${reportSort.dir==='asc'?'↑':'↓'}`}q('reportsLoad').onclick=async()=>{let d=await gj('/api/reports');reportItems=(d.items||[]).map((x,i)=>({...x,_idx:i+1}));renderReports()};loadStocks();'''
 STYLE_CSS = '''body{margin:0;background:#0f172a;color:#e5e7eb;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,"Microsoft YaHei",sans-serif}.wrap{max-width:1480px;margin:0 auto;padding:24px}h1{margin:0 0 8px}.tabs,.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}.tabs button,select,input,button{background:#111827;color:#e5e7eb;border:1px solid #334155;border-radius:8px;padding:9px 12px}button,.tabs button.active{cursor:pointer;background:#2563eb;border-color:#2563eb}.panel{display:none}.panel.active{display:block}.tablebox{overflow:auto;border:1px solid #1e293b;border-radius:12px}table{width:100%;border-collapse:collapse;background:#111827}th,td{padding:10px 12px;border-bottom:1px solid #1e293b;white-space:nowrap;text-align:left}th{background:#1e293b}.score{font-weight:700;color:#fbbf24}.sig,.tag{display:inline-block;background:#334155;border-radius:999px;padding:3px 8px}.tag{background:#1d4ed8;margin:2px}.red{color:#f87171}.green{color:#4ade80}.result{background:#020617;border:1px solid #1e293b;border-radius:12px;padding:14px;min-height:180px;white-space:pre-wrap;overflow:auto}.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}.card{background:#111827;border:1px solid #1e293b;border-radius:12px;padding:14px}.card p{color:#94a3b8}.report-tablebox{max-height:70vh}.report-table th{position:sticky;top:0;z-index:1;vertical-align:middle}.report-name,.report-card a{color:#93c5fd;text-decoration:none}.report-name:hover,.report-card a:hover{text-decoration:underline}.advice-cell{max-width:360px;overflow:hidden;text-overflow:ellipsis}.report-actions{display:flex;gap:8px;align-items:center;margin-top:0}.open-report{background:#2563eb;color:#fff;border-radius:8px;padding:7px 10px;text-decoration:none}.danger{background:#dc2626;border-color:#dc2626;padding:7px 10px}.sort-arrows{display:inline-flex;flex-direction:column;gap:1px;margin-left:4px;vertical-align:middle}.sort-arrows button{font-size:9px;line-height:9px;padding:0 3px;border-radius:2px;background:#334155;border-color:#475569;color:#cbd5e1}.risk{display:inline-block;border-radius:999px;padding:2px 8px}.risk-低{background:#14532d;color:#86efac}.risk-中{background:#713f12;color:#fde68a}.risk-高{background:#7f1d1d;color:#fecaca}'''
 
 def to_float(v, default=None):
@@ -164,6 +164,22 @@ def stock_payload(q):
     return {'updated_at':datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'strategy':strategy,'count':len(items),'items':items}
 
 
+def delete_stock_payload(body):
+    code = normalize_code(str(body.get('code','')))
+    if not code or len(code) != 6:
+        return {'ok': False, 'error': '股票代码无效'}
+    deleted = []
+    for path in DATA_DIR.glob(f'{code}_*_baostock.csv'):
+        try:
+            path.unlink()
+            deleted.append(str(path))
+        except Exception as e:
+            return {'ok': False, 'error': str(e), 'code': code, 'deleted': deleted}
+    if not deleted:
+        return {'ok': False, 'error': '未找到该股票历史数据文件', 'code': code}
+    return {'ok': True, 'code': code, 'deleted': deleted, 'count': len(deleted)}
+
+
 AI_JOBS = {}
 
 def ai_python_cmd():
@@ -187,7 +203,9 @@ def em_json(path, params):
     }
     query = urllib.parse.urlencode(params)
     urls = [
+        'https://push2delay.eastmoney.com' + path + '?' + query,
         'https://push2.eastmoney.com' + path + '?' + query,
+        'http://push2delay.eastmoney.com' + path + '?' + query,
         'http://push2.eastmoney.com' + path + '?' + query,
     ]
     for url in urls:
@@ -287,8 +305,19 @@ def alt_industry_stocks(industry_code, limit=3, period='5d'):
 
 def eastmoney_top_industries(period='5d'):
     fid = 'f164' if period == '5d' else 'f174'
-    fields = 'f12,f14,f164,f174,f109,f160,f1,f13'
-    data = em_json('/api/qt/clist/get', {'fid':fid,'po':'1','pz':'50','pn':'1','np':'1','fltt':'2','invt':'2','ut':'8dec03ba335b81bf4ebdf7b29ec27d15','fs':'m:90 s:4','fields':fields})
+    fields = 'f12,f14,f2,f160,f174,f175,f176,f177,f178,f179,f180,f181,f182,f183,f260,f261,f124,f1,f13'
+    data = em_json('/api/qt/clist/get', {
+        'fid': fid,
+        'po': '1',
+        'pz': '50',
+        'pn': '1',
+        'np': '1',
+        'fltt': '2',
+        'invt': '2',
+        'ut': '8dec03ba335b81bf4ebdf7b29ec27d15',
+        'fs': 'm:90+t:3',
+        'fields': fields,
+    })
     rows = (((data or {}).get('data') or {}).get('diff') or [])
     items=[]
     for x in rows:
@@ -296,41 +325,89 @@ def eastmoney_top_industries(period='5d'):
         code = x.get('f12','')
         name = x.get('f14','')
         if code and name:
-            items.append({'code':code,'name':name,'flow':flow,'period':period,'source':'eastmoney_push2'})
+            items.append({'code':code,'name':name,'flow':flow,'period':period,'source':'eastmoney_push2delay'})
     items.sort(key=lambda x:x['flow'], reverse=True)
-    return items[:3] or alt_top_industries(period)
+    return items[:3]
 
 def eastmoney_industry_stocks(industry_code, limit=3, period='5d'):
-    if str(industry_code).startswith('SINA_'):
-        return alt_industry_stocks(industry_code, limit, period)
     fid = 'f164' if period == '5d' else 'f174'
-    data = em_json('/api/qt/clist/get', {'fid':fid,'po':'1','pz':str(max(10, limit*3)),'pn':'1','np':'1','fltt':'2','invt':'2','ut':'8dec03ba335b81bf4ebdf7b29ec27d15','fs':'b:'+industry_code,'fields':'f12,f14,f164,f174,f62,f1,f13'})
+    fields = 'f12,f14,f2,f160,f174,f175,f176,f177,f178,f179,f180,f181,f182,f183,f260,f261,f124,f1,f13'
+    data = em_json('/api/qt/clist/get', {
+        'fid': fid,
+        'po': '1',
+        'pz': str(max(20, limit*5)),
+        'pn': '1',
+        'np': '1',
+        'fltt': '2',
+        'invt': '2',
+        'ut': '8dec03ba335b81bf4ebdf7b29ec27d15',
+        'fs': 'b:' + industry_code,
+        'fields': fields,
+    })
     rows = (((data or {}).get('data') or {}).get('diff') or [])
     out=[]
     for x in rows:
         code = normalize_code(x.get('f12',''))
         name = x.get('f14','') or ('股票'+code)
         if code and len(code)==6:
-            out.append({'code':code,'name':name,'flow':to_float(x.get(fid),0) or 0,'source':'eastmoney_push2'})
+            out.append({'code':code,'name':name,'flow':to_float(x.get(fid),0) or 0,'source':'eastmoney_push2delay'})
     out.sort(key=lambda x:x['flow'], reverse=True)
-    return out[:limit] or alt_industry_stocks(industry_code, limit, period)
+    return out[:limit]
 
 def fallback_industry_batch(period='5d', limit=3):
     return local_industry_batch(period, limit)
 
+def load_gainian_module():
+    path = ROOT / 'app' / 'model' / 'GaiNian stock.py'
+    spec = importlib.util.spec_from_file_location('gainian_stock_pool', str(path))
+    if spec is None or spec.loader is None:
+        raise RuntimeError('无法加载 GaiNian stock.py')
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
 def resolve_industry_batch(period='5d', limit=3):
+    source = 'eastmoney_push2delay'
     industries = eastmoney_top_industries(period)
-    stocks=[]
-    for ind in industries:
-        for st in eastmoney_industry_stocks(ind['code'], limit, period):
-            st['industry']=ind['name']; st['industry_code']=ind['code']; stocks.append(st)
-    if not stocks:
-        return fallback_industry_batch(period, limit)
-    seen=set(); uniq=[]
+    if not industries:
+        raise RuntimeError('东方财富板块资金流未返回行业数据，已禁用本地算法候选池')
+
+    out_industries = []
+    stocks = []
+    for ind0 in industries[:3]:
+        ind = {
+            'code': str(ind0.get('code', '')),
+            'name': str(ind0.get('name', '')),
+            'flow': ind0.get('flow', 0),
+            'period': period,
+            'source': source,
+        }
+        if not ind['code'] or not ind['name']:
+            continue
+        out_industries.append(ind)
+        for st0 in eastmoney_industry_stocks(ind['code'], limit, period):
+            code = normalize_code(st0.get('code', ''))
+            if len(code) != 6:
+                continue
+            stocks.append({
+                'code': code,
+                'name': str(st0.get('name') or ('股票' + code)),
+                'industry': ind['name'],
+                'industry_code': ind['code'],
+                'flow': st0.get('flow', 0),
+                'source': source,
+            })
+
+    seen = set()
+    uniq = []
     for st in stocks:
         if st['code'] not in seen:
-            seen.add(st['code']); uniq.append(st)
-    return industries, uniq
+            seen.add(st['code'])
+            uniq.append(st)
+
+    if not out_industries or not uniq:
+        raise RuntimeError('东方财富板块资金流未返回有效成分股，已禁用本地算法候选池')
+    return out_industries, uniq
 
 def run_ai_batch_job(job_id, stocks, days):
     job = AI_JOBS[job_id]
@@ -409,7 +486,7 @@ def ai_train_payload(body):
         industries, stocks = resolve_industry_batch(period, limit)
         if not stocks:
             return {'error':'替代行情接口当前不可达，且本地候选为空'}
-        AI_JOBS[job_id] = {'job_id':job_id,'days':days,'status':'queued','created_at':datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'mode':'替代行情接口行业/动量%s批量训练'%('5日' if period=='5d' else '10日'),'industries':industries,'stocks':stocks,'total':len(stocks),'completed':0}
+        AI_JOBS[job_id] = {'job_id':job_id,'days':days,'status':'queued','created_at':datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'mode':'东方财富板块资金流%s批量训练'%('5日' if period=='5d' else '10日'),'source':'eastmoney_push2delay','industries':industries,'stocks':stocks,'total':len(stocks),'completed':0}
         t = threading.Thread(target=run_ai_batch_job, args=(job_id, stocks, days), daemon=True)
         t.start()
         return AI_JOBS[job_id]
@@ -516,15 +593,72 @@ def history_update_payload(body):
     return {'ok':not errors,'updated':len(items),'failed':len(errors),'items':items,'errors':errors,'data_dir':str(DATA_DIR),'updated_at':datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 def backtest_payload(b):
-    code=normalize_code(b.get('code','')); days=int(b.get('days') or 20); targets=[]
-    if code: targets=[find_item(code)]
-    else: targets=[find_item(x['code']) for x in apply_strategy(load_items(),'balanced')[:10]]
-    res=[]
-    for item,rows in targets:
-        if not item: continue
-        c=[r['close'] for r in rows]; hist=round((c[-1]/c[-days-1]-1)*100,2) if len(c)>days+1 and c[-days-1] else 0; sim=kline_simulation(rows,days)
-        res.append({'code':item['code'],'name':item['name'],'days':days,'historical_return':hist,'simulation_return':sim['sim_return'],'kline_score':sim['kline_score'],'signal':sim['kline_signal']})
-    return {'module':'backtest.py 回测-轻量版','count':len(res),'items':res}
+    code = normalize_code(b.get('code',''))
+    days = int(b.get('days') or 30)
+    if days < 1:
+        days = 30
+    if days > 252:
+        days = 252
+
+    stock_files = []
+    if code:
+        stock_files = sorted(DATA_DIR.glob(f'{code}_*_baostock.csv'))
+        if not stock_files:
+            return {'ok': False, 'module': 'app/backtest.py', 'error': '未找到股票CSV数据', 'code': code}
+        stock_files = [stock_files[0].name]
+    else:
+        ranked = apply_strategy(load_items(), 'balanced')[:10]
+        for item in ranked:
+            matches = sorted(DATA_DIR.glob(f"{item['code']}_*_baostock.csv"))
+            if matches:
+                stock_files.append(matches[0].name)
+        if not stock_files:
+            return {'ok': False, 'module': 'app/backtest.py', 'error': '未找到可回测CSV数据'}
+
+    script = f'''
+import os, sys, json, contextlib, io, traceback
+os.chdir(r"/work/app")
+sys.path.insert(0, r"/work/app")
+import backtest
+out = []
+errors = []
+for stock_file in {stock_files!r}:
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            bt = backtest.BacktestSimulator(data_dir="stock_data")
+            bt.config.parameter_optimization.enabled = False
+            result = bt.run_backtest(stock_file, {days})
+            backtest.cleanup_resources()
+        if result:
+            out.append({{
+                "stock_file": stock_file,
+                "report_path": result.get("report_path"),
+                "parameter_report_path": result.get("parameter_report_path"),
+                "models": [m.get("模型名称") or m.get("model") for m in result.get("metrics", [])],
+                "metrics_count": len(result.get("metrics", [])),
+                "log_tail": buf.getvalue()[-5000:],
+            }})
+        else:
+            errors.append({{"stock_file": stock_file, "error": "backtest.py 未返回结果", "log_tail": buf.getvalue()[-5000:]}})
+    except Exception as e:
+        errors.append({{"stock_file": stock_file, "error": str(e), "traceback": traceback.format_exc()[-3000:], "log_tail": buf.getvalue()[-5000:]}})
+print(json.dumps({{"ok": len(errors)==0, "module": "app/backtest.py", "days": {days}, "count": len(out), "items": out, "errors": errors}}, ensure_ascii=False))
+'''
+    try:
+        cp = subprocess.run([ai_python_cmd(), '-c', script], cwd=str(ROOT/'app'), text=True, capture_output=True, timeout=900)
+        raw = (cp.stdout or '').strip()
+        err = (cp.stderr or '').strip()
+        if cp.returncode != 0:
+            return {'ok': False, 'module': 'app/backtest.py', 'error': 'backtest.py 执行失败', 'returncode': cp.returncode, 'stdout_tail': raw[-5000:], 'stderr_tail': err[-5000:]}
+        try:
+            return json.loads(raw.splitlines()[-1])
+        except Exception:
+            return {'ok': False, 'module': 'app/backtest.py', 'error': 'backtest.py 输出解析失败', 'stdout_tail': raw[-5000:], 'stderr_tail': err[-5000:]}
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'module': 'app/backtest.py', 'error': 'backtest.py 回测超时'}
+    except Exception as e:
+        return {'ok': False, 'module': 'app/backtest.py', 'error': str(e)}
 
 def report_roots():
     return [ROOT/'app'/'results'/'reports', ROOT/'app'/'results', ROOT/'app'/'backtest_results']
@@ -559,15 +693,27 @@ def safe_report_path(rel):
             pass
     return None
 
+
+def extract_html_total_return(path):
+    try:
+        text = Path(path).read_text(encoding='utf-8', errors='ignore')
+        m = re.search(r'<div class="stat-label">\s*Total Return\s*</div>\s*<div class="stat-value"[^>]*>\s*([+-]?[0-9]+(?:\.[0-9]+)?)\s*%', text, re.I)
+        if m:
+            return round(float(m.group(1)), 2)
+    except Exception:
+        pass
+    return None
+
 def report_display_name(filename):
     m = re.match(r'^(\d{6})_([^_]+)', filename or '')
     return f"{m.group(1)}_{m.group(2)}" if m else (filename or '')
 
-def report_metrics_from_name(name, stat):
+def report_metrics_from_name(name, stat, path=None):
     code = normalize_code(name)
     item, rows = find_item(code) if code and len(code)==6 else (None, [])
     vol = item.get('volatility') if item else None
     dd = item.get('drawdown') if item else None
+    total_return = extract_html_total_return(path) if path else None
     score = item.get('score') if item else None
     if rows and len(rows) > 2:
         rets=[rows[i]['close']/rows[i-1]['close']-1 for i in range(1,len(rows)) if rows[i-1].get('close')]
@@ -576,6 +722,8 @@ def report_metrics_from_name(name, stat):
         mean=avg(recent) or 0
         sd=pstdev(recent) if len(recent)>=2 else 0
         sharpe=round((mean/sd)*(252**0.5),2) if sd else None
+        if total_return is None and len(rows) > 1 and rows[0].get('close'):
+            total_return = round((rows[-1]['close']/rows[0]['close']-1)*100, 2)
     else:
         win=None; sharpe=None
     risk_score = round(max(0, min(100, (vol or 0)*6 + abs(dd or 0)*1.5 + max(0, 70-(score or 50))*0.6)), 2)
@@ -583,7 +731,7 @@ def report_metrics_from_name(name, stat):
     if risk_level == '高': advice='高风险：控制仓位，等待波动和回撤收敛后再观察。'
     elif risk_level == '中': advice='中等风险：可小仓位跟踪，重点观察趋势延续和止损位。'
     else: advice='低风险：走势相对稳定，可结合评分和基本面继续筛选。'
-    return {'risk_level':risk_level,'risk_score':risk_score,'volatility':vol,'max_drawdown':dd,'sharpe':sharpe,'win_rate':win,'advice':advice}
+    return {'risk_level':risk_level,'risk_score':risk_score,'volatility':vol,'max_drawdown':total_return,'total_return':total_return,'sharpe':sharpe,'win_rate':win,'advice':advice}
 
 def reports_payload():
     found={}
@@ -592,7 +740,7 @@ def reports_payload():
             for p in root.rglob('*.html'):
                 try:
                     rp=p.resolve()
-                    item={'name':p.name,'display_name':report_display_name(p.name),'path':str(rp),'id':quote(p.name),'url':'/reports/'+quote(p.name),'size':p.stat().st_size,'mtime':datetime.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S'),'format':'html'}; item.update(report_metrics_from_name(p.name, p.stat())); found[str(rp)]=item
+                    item={'name':p.name,'display_name':report_display_name(p.name),'path':str(rp),'id':quote(p.name),'url':'/reports/'+quote(p.name),'size':p.stat().st_size,'mtime':datetime.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S'),'format':'html'}; item.update(report_metrics_from_name(p.name, p.stat(), rp)); found[str(rp)]=item
                 except Exception:
                     pass
     items=sorted(found.values(), key=lambda x:x['mtime'], reverse=True)
@@ -638,7 +786,7 @@ def application(env,start):
             start('200 OK',[('Content-Type',ctype),('Content-Length',str(len(data)))])
             return [data]
         return resp(start,'404 Not Found','Not Found','text/plain')
-    routes={'/health':lambda:{'status':'ok','data_dir':str(DATA_DIR), 'exists':DATA_DIR.exists()},'/api/stocks':lambda:stock_payload(q),'/api/history/update':lambda:history_update_payload(read_body(env)),'/api/models':models_payload,'/api/features':lambda:features_payload(q.get('code',[''])[0]),'/api/reports':reports_payload,'/api/reports/delete':lambda:delete_report_payload(read_body(env)),'/api/config':config_payload,'/api/ai/train':lambda:ai_train_payload(read_body(env)),'/api/ai/status':lambda:ai_status_payload(q.get('job_id',[''])[0]),'/api/analyze':lambda:analyze_payload(read_body(env)),'/api/backtest':lambda:backtest_payload(read_body(env))}
+    routes={'/health':lambda:{'status':'ok','data_dir':str(DATA_DIR), 'exists':DATA_DIR.exists()},'/api/stocks':lambda:stock_payload(q),'/api/stocks/delete':lambda:delete_stock_payload(read_body(env)),'/api/history/update':lambda:history_update_payload(read_body(env)),'/api/models':models_payload,'/api/features':lambda:features_payload(q.get('code',[''])[0]),'/api/reports':reports_payload,'/api/reports/delete':lambda:delete_report_payload(read_body(env)),'/api/config':config_payload,'/api/ai/train':lambda:ai_train_payload(read_body(env)),'/api/ai/status':lambda:ai_status_payload(q.get('job_id',[''])[0]),'/api/analyze':lambda:analyze_payload(read_body(env)),'/api/backtest':lambda:backtest_payload(read_body(env))}
     if path in routes: return resp(start,'200 OK',json.dumps(routes[path](),ensure_ascii=False),'application/json')
     return resp(start,'404 Not Found','Not Found','text/plain')
 
