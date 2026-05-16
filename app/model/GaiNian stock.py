@@ -30,7 +30,7 @@ def get_concept_fund_flow_top3() -> List[Tuple[str, str]]:
     Returns:
         List[Tuple[str, str]]: 包含(概念代码, 概念名称)的列表
     """
-    url = "https://push2.eastmoney.com/api/qt/clist/get"
+    url = "https://push2delay.eastmoney.com/api/qt/clist/get"
 
     params = {
         'fid': 'f174',#当日排行f62,五日排行f164,十日排行f174
@@ -42,7 +42,7 @@ def get_concept_fund_flow_top3() -> List[Tuple[str, str]]:
         'invt': '2',
         'ut': '8dec03ba335b81bf4ebdf7b29ec27d15',
         'fs': 'm:90+t:3',
-        'fields': 'f12,f14,f62'
+        'fields': 'f12,f14,f2,f160,f174,f175,f176,f177,f178,f179,f180,f181,f182,f183,f260,f261,f124,f1,f13'
     }
 
     headers = {
@@ -62,7 +62,7 @@ def get_concept_fund_flow_top3() -> List[Tuple[str, str]]:
 
         # 按资金流入排序
         sorted_concepts = sorted(concept_list,
-                                 key=lambda x: float(x.get('f62', 0)),
+                                 key=lambda x: float(x.get('f174', 0)),
                                  reverse=True)
 
         # 获取前三名
@@ -95,7 +95,7 @@ def get_stocks_by_concept(concept_code: str) -> List[Tuple[str, str]]:
     Returns:
         List[Tuple[str, str]]: 包含(股票代码, 股票名称)的列表
     """
-    url = "https://push2.eastmoney.com/api/qt/clist/get"
+    url = "https://push2delay.eastmoney.com/api/qt/clist/get"
 
     params = {
         'fid': 'f174',  # 按当日资金流入排序
@@ -107,7 +107,7 @@ def get_stocks_by_concept(concept_code: str) -> List[Tuple[str, str]]:
         'invt': '2',
         'ut': '8dec03ba335b81bf4ebdf7b29ec27d15',
         'fs': f'b:{concept_code}',
-        'fields': 'f12,f14,f62'  # 添加f62字段获取资金流入数据用于排序
+        'fields': 'f12,f14,f2,f160,f174,f175,f176,f177,f178,f179,f180,f181,f182,f183,f260,f261,f124,f1,f13'  # 添加f62字段获取资金流入数据用于排序
     }
 
     headers = {
@@ -127,7 +127,7 @@ def get_stocks_by_concept(concept_code: str) -> List[Tuple[str, str]]:
 
         # 按资金流入排序（降序）
         sorted_stocks = sorted(stock_list,
-                               key=lambda x: float(x.get('f62', 0)),
+                               key=lambda x: float(x.get('f174', 0)),
                                reverse=True)
 
         # 取前20只股票
@@ -160,7 +160,7 @@ def get_stocks_by_concept(concept_code: str) -> List[Tuple[str, str]]:
     Returns:
         List[Tuple[str, str]]: 包含(股票代码, 股票名称)的列表
     """
-    url = "https://push2.eastmoney.com/api/qt/clist/get"
+    url = "https://push2delay.eastmoney.com/api/qt/clist/get"
 
     params = {
         'fid': 'f174',  # 按当日资金流入排序
@@ -172,7 +172,7 @@ def get_stocks_by_concept(concept_code: str) -> List[Tuple[str, str]]:
         'invt': '2',
         'ut': '8dec03ba335b81bf4ebdf7b29ec27d15',
         'fs': f'b:{concept_code}',
-        'fields': 'f12,f14,f62'  # 添加f62字段获取资金流入数据用于排序
+        'fields': 'f12,f14,f2,f160,f174,f175,f176,f177,f178,f179,f180,f181,f182,f183,f260,f261,f124,f1,f13'  # 添加f62字段获取资金流入数据用于排序
     }
 
     headers = {
@@ -193,7 +193,7 @@ def get_stocks_by_concept(concept_code: str) -> List[Tuple[str, str]]:
         # 改进的排序逻辑，处理无效数据
         def get_flow_value(item):
             """安全获取资金流入值"""
-            flow_value = item.get('f62', '0')
+            flow_value = item.get('f174', '0')
             if flow_value == '-' or flow_value == '' or flow_value is None:
                 return 0.0  # 将无效值设为0
             try:
