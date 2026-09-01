@@ -153,6 +153,7 @@ stock_system:
 
 # ==================== 多因子模型配置 ====================
           multi_factor: 0.4
+          quant_factor: 0.4
       selected_model_count: 4
       min_model_count: 2
       confidence_threshold: 0.65
@@ -380,6 +381,27 @@ stock_system:
     window_size: 100
     prediction_horizon: 5
     weight_strategy: equal
+
+# ==================== 量化因子模型配置 ====================
+  quant_factor:
+    # 模型基础评分，用于模型权重分配
+    base_score: 6.0
+    # 是否启用
+    enabled: true
+    # 随机森林树数量
+    n_estimators: 100
+    # 最大深度
+    max_depth: 8
+    # 量化因子数量
+    n_factors: 16
+    # 回看窗口
+    window_size: 60
+    # 预测步长
+    prediction_horizon: 5
+    # 最少训练点数
+    min_data_required: 120
+    # 动量计算窗口
+    lookback_windows: [5, 10, 20, 60]
 
 # ==================== 技术特征配置 ====================
   technical_features:

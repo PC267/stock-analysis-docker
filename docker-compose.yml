@@ -8,8 +8,15 @@ services:
     restart: unless-stopped
     ports:
       - "9119:9119"
+    # 降低最大打开文件数，减少高并发连接时的资源消耗
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 1024
+
     environment:
       WEB_STOCK_PICKER_PORT: "9119"
+      TZ: Asia/Shanghai
       REPORT_OUTPUT_DIR: /work/app/results/reports
     volumes:
       - ./app/stock_data:/work/app/stock_data

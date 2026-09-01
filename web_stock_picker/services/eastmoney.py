@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import json, urllib.request, urllib.parse, importlib.util
+import json, time, urllib.request, urllib.parse, importlib.util
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -168,6 +168,89 @@ def eastmoney_industry_stocks(industry_code, limit=3, period='5d'):
 
 def fallback_industry_batch(period='5d', limit=3):
     return local_industry_batch(period, limit)
+
+# 行业数据缓存：stock_code -> industry_name
+_industry_cache = {}
+_industry_cache_ts = 0
+_INDUSTRY_CACHE_TTL = 3600  # 1小时
+
+
+def _fast_em_clist(params):
+    """快速直连 EM API，不走 em_json 的 4 次重试 + 12s 超时"""
+    url = 'https://push2delay.eastmoney.com/api/qt/clist/get?' + urllib.parse.urlencode(params)
+    try:
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0', 'Referer': 'https://data.eastmoney.com/',
+        })
+        return json.loads(urllib.request.urlopen(req, timeout=10).read().decode('utf-8', 'ignore'))
+    except Exception:
+        return None
+
+
+def _warm_industry_cache():
+    """后台预热行业数据缓存，重试失败页面。"""
+    global _industry_cache, _industry_cache_ts
+    result = dict(_industry_cache)
+    page = 1
+    max_pages = 30
+    failed_retries = 2
+    while page <= max_pages:
+        for attempt in range(failed_retries + 1):
+            try:
+                url = ('https://push2delay.eastmoney.com/api/qt/clist/get?' +
+                       urllib.parse.urlencode({
+                           'fid': 'f12', 'po': '0', 'pz': '100', 'pn': str(page),
+                           'np': '1', 'fltt': '2', 'invt': '2',
+                           'ut': '8dec03ba335b81bf4ebdf7b29ec27d15',
+                           'fs': 'm:0+t:6', 'fields': 'f12,f100',
+                       }))
+                req = urllib.request.Request(url, headers={
+                    'User-Agent': 'Mozilla/5.0', 'Referer': 'https://data.eastmoney.com/',
+                })
+                d = json.loads(urllib.request.urlopen(req, timeout=5).read().decode('utf-8', 'ignore'))
+                items = ((d or {}).get('data') or {}).get('diff', [])
+                for x in items:
+                    code = normalize_code(str(x.get('f12', '')))
+                    industry = str(x.get('f100', '') or '')
+                    if code and len(code) == 6 and industry and industry != '-':
+                        result[code] = industry
+                if len(items) < 100:
+                    _industry_cache.update(result)
+                    _industry_cache_ts = time.time()
+                    return
+                break  # success, exit retry loop
+            except Exception:
+                if attempt >= failed_retries:
+                    break  # give up this page
+                continue
+        page += 1
+    _industry_cache.update(result)
+    _industry_cache_ts = time.time()
+
+
+def fetch_stock_industries(codes=None):
+    """批量获取A股行业数据（东方财富行业分类），缓存1小时。
+    
+    纯缓存查询，不发起API请求。
+    
+    Args:
+        codes: 需要查询的股票代码列表，为None时获取全部。
+    
+    Returns:
+        dict: {code: industry_name} 映射
+    """
+    if codes:
+        return {c: _industry_cache.get(c, '') for c in codes}
+    return dict(_industry_cache)
+
+
+# 同步预热（模块导入时执行，约4秒）
+# 如果网络不可用则静默失败，不影响启动
+try:
+    _warm_industry_cache()
+except Exception:
+    pass
+
 
 def load_gainian_module():
     path = ROOT / 'app' / 'model' / 'GaiNian stock.py'

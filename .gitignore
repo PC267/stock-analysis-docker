@@ -11,6 +11,10 @@ app/catboost_info/
 app/stock_data/*.csv
 app/results/reports/
 app/backtest_results/
+# literal-backslash dir created by Windows tools (evades normal ignore)
+app/results/reports\\backtest_results/
+web_stock_picker/runtime/schedule_notify/
+web_stock_picker/runtime/ai_schedule.json
 
 # keep runtime placeholder directories
 !app/stock_data/.gitkeep

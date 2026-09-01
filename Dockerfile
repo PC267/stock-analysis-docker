@@ -8,6 +8,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /work
 
+# 降低文件描述符限制，减少高并发请求时的资源消耗
+RUN echo "* soft nofile 1024" >> /etc/security/limits.conf && \
+    echo "* hard nofile 1024" >> /etc/security/limits.conf
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl libgomp1 libgfortran5 \
     && rm -rf /var/lib/apt/lists/*

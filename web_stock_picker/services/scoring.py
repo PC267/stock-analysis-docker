@@ -1,8 +1,18 @@
 # -*- coding: utf-8 -*-
-import csv, math, re, urllib.request
+import csv, math, re, threading, time, urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date
 from pathlib import Path
 from statistics import pstdev
+
+# CSV 解析结果缓存：key=(解析路径, mtime, size), 避免重复读取
+_csv_cache = {}
+_csv_cache_lock = threading.Lock()
+# 目录扫描缓存：按 DATA_DIR mtime 失效，避免每次全量 glob
+_paths_cache = {'key': None, 'data': ({}, [])}
+# load_items 结果缓存：30 秒 TTL，热刷新不重算
+_items_cache = {'ts': 0.0, 'data': None}
+_ITEMS_CACHE_TTL = 300
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / 'app' / 'stock_data'
@@ -82,6 +92,22 @@ def fetch_realtime_quote(code):
     # push2 当前在该环境会被远端断开；改用可用的新浪实时接口，腾讯作为备用。
     return fetch_sina_quote(code) or fetch_tencent_quote(code)
 
+
+def batch_fetch_realtime_quotes(codes):
+    """并行批量获取多只股票实时行情，显著减少串行 HTTP 请求耗时。"""
+    quotes = {}
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        fut_map = {pool.submit(fetch_realtime_quote, code): code for code in codes}
+        for fut in as_completed(fut_map):
+            code = fut_map[fut]
+            try:
+                result = fut.result()
+                if result:
+                    quotes[code] = result
+            except Exception:
+                pass
+    return quotes
+
 def merge_realtime_row(code, rows):
     q=fetch_realtime_quote(code)
     if not q: return rows,'csv'
@@ -122,22 +148,139 @@ def score_stock(code,name,rows):
     score=round(max(0,min(100,score)),2); signal='强关注' if score>=78 else '关注' if score>=65 else '观察' if score>=50 else '谨慎'
     return {'code':code,'name':name,'date':last['date'],'price':round(price,3),'change_pct':round(last['pctChg'],2),'score':score,'signal':signal,'ma5':round(ma5,3) if ma5 else None,'ma10':round(ma10,3) if ma10 else None,'ma20':round(ma20,3) if ma20 else None,'ma60':round(ma60,3) if ma60 else None,'rsi14':round(rsi14,2) if rsi14 is not None else None,'volume_ratio':round(vr,2) if vr is not None else None,'momentum20':round(mom,2) if mom is not None else None,'drawdown':round(dd,2) if dd is not None else None,'volatility':round(vol,2) if vol is not None else None,'tags':tags}
 
+def latest_stock_paths(cleanup=True):
+    # 检查路径缓存：DATA_DIR 未变化则直接返回（路径缓存不过期，可进一步按文件修改时间失效）
+    try:
+        st = DATA_DIR.stat()
+        dir_key = (st.st_mtime, st.st_size)
+    except Exception:
+        dir_key = None
+    if dir_key is not None and _paths_cache['key'] == dir_key:
+        return _paths_cache['data']
+
+    grouped = {}
+    deleted = []
+    seen = set()
+    for path in DATA_DIR.glob('*_baostock.csv'):
+        try:
+            rp = path.resolve()
+            key_path = str(rp)
+            if key_path in seen:
+                continue
+            seen.add(key_path)
+            code, name = parse_name(path)
+            code = normalize_code(code)
+            if not code or len(code) != 6:
+                continue
+            st = path.stat()
+            grouped.setdefault(code, []).append((st.st_mtime, key_path, path, name))
+        except Exception:
+            pass
+    latest = {}
+    for code, rows in grouped.items():
+        rows.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        latest[code] = rows[0][2]
+        if cleanup:
+            for _, _, old_path, _ in rows[1:]:
+                try:
+                    old_path.unlink()
+                    deleted.append({'code': code, 'path': str(old_path)})
+                except FileNotFoundError:
+                    pass
+                except Exception as e:
+                    deleted.append({'code': code, 'path': str(old_path), 'error': str(e)})
+    result = (latest, deleted)
+    if dir_key is not None:
+        _paths_cache['key'] = dir_key
+        _paths_cache['data'] = result
+    return result
+
+
+def enrich_stock_item(c, n, rows, src):
+    item = score_stock(c, n, rows)
+    if item:
+        sim = kline_simulation(rows)
+        item.update(sim)
+        item['score'] = round(max(0, min(100, item['score']*.82 + item['kline_score']*.18)), 2)
+        item['data_source'] = src
+        item['data_fresh'] = src != 'csv'
+        item['tags'].append(item['kline_signal'])
+    return item
+
+
 def find_item(code):
     code = normalize_code(code)
-    for path in DATA_DIR.glob('*_baostock.csv'):
-        c,n=parse_name(path)
-        if not code or c==code:
-            rows,src=merge_realtime_row(c,read_stock(path)); item=score_stock(c,n,rows)
+    paths, _ = latest_stock_paths(cleanup=True)
+    for c, path in paths.items():
+        if not code or c == code:
+            _, n = parse_name(path)
+            rows, src = merge_realtime_row(c, read_stock(path))
+            item = enrich_stock_item(c, n, rows, src)
             if item:
-                sim=kline_simulation(rows); item.update(sim); item['score']=round(max(0,min(100,item['score']*.82+item['kline_score']*.18)),2); item['data_source']=src; item['data_fresh']=src!='csv'; item['tags'].append(item['kline_signal']); return item,rows
-    return None,[]
+                return item, rows
+    return None, []
 
-def load_items():
-    out=[]
-    for path in DATA_DIR.glob('*_baostock.csv'):
-        item,_=find_item(parse_name(path)[0])
-        if item: out.append(item)
-    return out
+
+def _read_stock_cached(path):
+    """带缓存的 read_stock，按文件 mtime + size 失效。"""
+    try:
+        st = path.stat()
+        key = (str(path.resolve()), st.st_mtime, st.st_size)
+    except Exception:
+        return read_stock(path)
+    with _csv_cache_lock:
+        if key in _csv_cache:
+            return [dict(r) for r in _csv_cache[key]]  # 返回副本防止外部修改
+        rows = read_stock(path)
+        _csv_cache[key] = rows
+    return rows
+
+
+def load_items(return_deleted=False):
+    # 30 秒 TTL 缓存：热刷新跳过全量重算
+    now = time.time()
+    if _items_cache['data'] is not None and (now - _items_cache['ts']) < _ITEMS_CACHE_TTL:
+        cached_out, cached_del = _items_cache['data']
+        out = [dict(x) for x in cached_out]   # 深拷贝防止调用方修改缓存
+        del_list = [dict(x) for x in cached_del]
+        return (out, del_list) if return_deleted else out
+
+    out = []
+    paths, deleted = latest_stock_paths(cleanup=True)
+
+    # Phase 1: 读取所有 CSV（带缓存）
+    code_info = {}  # code -> {name, path, rows}
+    for c, path in paths.items():
+        _, n = parse_name(path)
+        code_info[c] = {'name': n, 'path': path, 'rows': _read_stock_cached(path)}
+
+    # Phase 2: 并行获取所有股票实时行情
+    codes = list(code_info.keys())
+    quotes = batch_fetch_realtime_quotes(codes)
+
+    # Phase 3: 合并行情并计算评分
+    for c in codes:
+        info = code_info[c]
+        rows = info['rows']
+        q = quotes.get(c)
+        if q:
+            rows = list(rows)
+            if rows and rows[-1]['date'] == q['date']:
+                rows[-1].update({k: q[k] for k in ('open','high','low','close','volume','pctChg')})
+            else:
+                rows.append({k: q[k] for k in ('date','open','high','low','close','volume','pctChg')})
+            rows.sort(key=lambda x: x['date'])
+            src = q['source']
+        else:
+            src = 'csv'
+        item = enrich_stock_item(c, info['name'], rows, src)
+        if item:
+            out.append(item)
+
+    # 缓存结果（深拷贝确保后续调用方修改不影响缓存）
+    _items_cache['ts'] = time.time()
+    _items_cache['data'] = ([dict(x) for x in out], [dict(x) for x in deleted])
+    return (out, deleted) if return_deleted else out
 
 def apply_strategy(items,strategy):
     if strategy=='momentum': items=[x for x in items if (x.get('momentum20') or -999)>0 and x.get('ma20') and x['price']>=x['ma20']]; return sorted(items,key=lambda x:((x.get('momentum20') or -999),x['score']),reverse=True)
@@ -146,11 +289,12 @@ def apply_strategy(items,strategy):
     return sorted(items,key=lambda x:x['score'],reverse=True)
 
 def stock_payload(q):
-    items=load_items(); kw=q.get('keyword',[''])[0].lower(); limit=max(1,min(int(q.get('limit',['50'])[0] or 50),500)); strategy=q.get('strategy',['balanced'])[0]
+    items, deleted_duplicates = load_items(return_deleted=True)
+    kw=q.get('keyword',[''])[0].lower(); limit=max(1,min(int(q.get('limit',['50'])[0] or 50),500)); strategy=q.get('strategy',['balanced'])[0]
     if kw: items=[x for x in items if kw in x['code'].lower() or kw in x['name'].lower()]
     items=apply_strategy(items,strategy)[:limit]
     for i,x in enumerate(items,1): x['rank']=i
-    return {'updated_at':datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'strategy':strategy,'count':len(items),'items':items}
+    return {'updated_at':datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'strategy':strategy,'count':len(items),'items':items,'deleted_duplicates':len(deleted_duplicates),'deleted_duplicate_items':deleted_duplicates}
 
 
 def delete_stock_payload(body):

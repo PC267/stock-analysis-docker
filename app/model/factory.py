@@ -5,47 +5,6 @@ import warnings
 
 warnings.filterwarnings('ignore')
 from statsmodels.tsa.stattools import adfuller
-import xgboost as xgb
-from pykalman import KalmanFilter
-
-# 动态导入statsmodels的SARIMAX
-try:
-    from statsmodels.tsa.statespace.sarimax import SARIMAX
-    SARIMAX_AVAILABLE = True
-except ImportError:
-    SARIMAX_AVAILABLE = False
-    print("⚠️ statsmodels SARIMAX不可用，将跳过SARIMA模型")
-
-# 新增模型相关库的检测
-try:
-    from statsmodels.tsa.arima.model import ARIMA
-    ARIMA_AVAILABLE = True
-except ImportError:
-    ARIMA_AVAILABLE = False
-    print("⚠️ ARIMA模型库不可用，将跳过ARIMA")
-
-try:
-    import tensorflow as tf
-    from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import LSTM, Dense, Dropout
-    TF_AVAILABLE = True
-except ImportError:
-    TF_AVAILABLE = False
-    print("⚠️ TensorFlow/Keras不可用，将跳过LSTM")
-
-try:
-    import lightgbm as lgb
-    LGB_AVAILABLE = True
-except ImportError:
-    LGB_AVAILABLE = False
-    print("⚠️ LightGBM库不可用，将跳过LightGBM")
-
-try:
-    import catboost as cb
-    CB_AVAILABLE = True
-except ImportError:
-    CB_AVAILABLE = False
-    print("⚠️ CatBoost库不可用，将跳过CatBoost")
 
 
 class ModelFactory:
@@ -127,6 +86,16 @@ class ModelFactory:
                 'window_size': 50,
                 'prediction_horizon': 5,
                 'min_data_required': 100
+            },
+            'quant_factor': {
+                'n_estimators': 100,
+                'max_depth': 8,
+                'learning_rate': 0.05,
+                'n_factors': 16,
+                'window_size': 60,
+                'prediction_horizon': 5,
+                'min_data_required': 120,
+                'lookback_windows': [5, 10, 20, 60]
             }
         }
 
@@ -141,7 +110,7 @@ class ModelFactory:
             if section in self.parameter_recommendations and key in self.parameter_recommendations[section]:
                 return self.parameter_recommendations[section][key]
 
-            if section in ['sarima', 'garch', 'xgboost', 'multi_factor', 'arima', 'lstm', 'lightgbm', 'catboost']:
+            if section in ['sarima', 'garch', 'xgboost', 'multi_factor', 'arima', 'lstm', 'lightgbm', 'catboost', 'quant_factor']:
                 recommendation = self.param_loader.get_model_recommendation(section)
                 if recommendation and recommendation.parameters and key in recommendation.parameters:
                     return recommendation.parameters[key]
@@ -291,6 +260,7 @@ class ModelFactory:
             'lstm': lambda: self._train_lstm(close_prices),
             'lightgbm': lambda: self._train_lightgbm(close_prices, returns, volume),
             'catboost': lambda: self._train_catboost(close_prices, returns, volume),
+            'quant_factor': lambda: self._train_quant_factor(df, close_prices, volume, high, low, open_prices),
             # ensemble 不需要单独训练，仅用于模拟组合
         }
 
@@ -323,11 +293,11 @@ class ModelFactory:
             pass
 
         return {
-            'high_volatility_nonlinear': ['garch', 'xgboost', 'lightgbm', 'catboost'],
-            'high_volatility': ['garch', 'multi_factor', 'arima'],
-            'trending': ['sarima', 'multi_factor', 'arima', 'lightgbm'],
-            'stable_trend': ['sarima', 'garch', 'arima', 'catboost'],
-            'default': ['sarima', 'garch', 'multi_factor', 'xgboost', 'arima', 'lightgbm', 'catboost']
+            'high_volatility_nonlinear': ['garch', 'xgboost', 'lightgbm', 'catboost', 'quant_factor'],
+            'high_volatility': ['garch', 'multi_factor', 'arima', 'quant_factor'],
+            'trending': ['sarima', 'multi_factor', 'arima', 'lightgbm', 'quant_factor'],
+            'stable_trend': ['sarima', 'garch', 'arima', 'catboost', 'quant_factor'],
+            'default': ['sarima', 'garch', 'multi_factor', 'xgboost', 'arima', 'lightgbm', 'catboost', 'quant_factor']
         }
 
     def _get_model_weight_config(self):
@@ -340,19 +310,21 @@ class ModelFactory:
             pass
 
         return {
-            'high_volatility_nonlinear': [('xgboost', 0.30), ('lightgbm', 0.25), ('catboost', 0.25), ('garch', 0.20)],
-            'high_volatility': [('garch', 0.40), ('multi_factor', 0.35), ('arima', 0.25)],
-            'trending': [('sarima', 0.35), ('multi_factor', 0.30), ('arima', 0.20), ('lightgbm', 0.15)],
-            'stable_trend': [('sarima', 0.40), ('garch', 0.30), ('arima', 0.20), ('catboost', 0.10)],
-            'default': [('sarima', 0.20), ('garch', 0.20), ('xgboost', 0.15), ('multi_factor', 0.15),
-                        ('arima', 0.10), ('lightgbm', 0.10), ('catboost', 0.10)]
+            'high_volatility_nonlinear': [('xgboost', 0.25), ('quant_factor', 0.22), ('lightgbm', 0.20), ('catboost', 0.18), ('garch', 0.15)],
+            'high_volatility': [('garch', 0.30), ('multi_factor', 0.25), ('quant_factor', 0.25), ('arima', 0.20)],
+            'trending': [('sarima', 0.28), ('multi_factor', 0.24), ('quant_factor', 0.22), ('arima', 0.15), ('lightgbm', 0.11)],
+            'stable_trend': [('sarima', 0.30), ('garch', 0.22), ('quant_factor', 0.22), ('arima', 0.16), ('catboost', 0.10)],
+            'default': [('sarima', 0.17), ('garch', 0.17), ('xgboost', 0.13), ('multi_factor', 0.13),
+                        ('quant_factor', 0.13), ('arima', 0.09), ('lightgbm', 0.09), ('catboost', 0.09)]
         }
 
     # ==================== 原有模型训练方法（完整保留） ====================
 
     def _train_sarima(self, close_scaled):
         """训练SARIMA模型 - 基于推荐参数优化"""
-        if not SARIMAX_AVAILABLE:
+        try:
+            from statsmodels.tsa.statespace.sarimax import SARIMAX
+        except ImportError:
             print("  ⚠️ SARIMAX不可用，跳过SARIMA模型")
             self.models['sarima'] = None
             return
@@ -617,6 +589,12 @@ class ModelFactory:
     def _train_xgboost(self, close_prices, returns, volume):
         """训练XGBoost模型 - 基于推荐参数优化"""
         try:
+            import xgboost as xgb
+        except ImportError:
+            print("  ⚠️ XGBoost库不可用，跳过")
+            self.models['xgboost'] = None
+            return
+        try:
             xgboost_params = self._get_model_params('xgboost')
             min_data_required = xgboost_params.get('min_data_required', 100)
             n_estimators = xgboost_params.get('n_estimators', 50)
@@ -855,7 +833,9 @@ class ModelFactory:
     # ==================== 新增模型训练方法 ====================
     def _train_arima(self, close_prices):
         """训练ARIMA模型"""
-        if not ARIMA_AVAILABLE:
+        try:
+            from statsmodels.tsa.arima.model import ARIMA
+        except ImportError:
             print("  ⚠️ ARIMA库不可用，跳过")
             self.models['arima'] = None
             return
@@ -890,8 +870,11 @@ class ModelFactory:
 
     def _train_lstm(self, close_prices):
         """训练LSTM模型"""
-        if not TF_AVAILABLE:
-            print("  ⚠️ TensorFlow不可用，跳过LSTM")
+        try:
+            from tensorflow.keras.models import Sequential
+            from tensorflow.keras.layers import LSTM, Dense, Dropout
+        except ImportError:
+            print("  ⚠️ TensorFlow/Keras不可用，跳过LSTM")
             self.models['lstm'] = None
             return
 
@@ -939,7 +922,9 @@ class ModelFactory:
 
     def _train_lightgbm(self, close_prices, returns, volume):
         """训练LightGBM模型"""
-        if not LGB_AVAILABLE:
+        try:
+            import lightgbm as lgb
+        except ImportError:
             print("  ⚠️ LightGBM库不可用，跳过")
             self.models['lightgbm'] = None
             return
@@ -980,7 +965,9 @@ class ModelFactory:
 
     def _train_catboost(self, close_prices, returns, volume):
         """训练CatBoost模型"""
-        if not CB_AVAILABLE:
+        try:
+            import catboost as cb
+        except ImportError:
             print("  ⚠️ CatBoost库不可用，跳过")
             self.models['catboost'] = None
             return
@@ -1019,6 +1006,268 @@ class ModelFactory:
             print(f"  ❌ CatBoost训练失败: {e}")
             self.models['catboost'] = None
 
+    # ==================== 量化因子模型 ====================
+    def _train_quant_factor(self, df, close_prices, volume, high, low, open_prices):
+        """训练量化因子模型 - 基于多因子截面回归
+
+        从 OHLCV 数据中计算一整套标准化量化因子（动量、波动、趋势、
+        流动性、量价背离、偏度峰度等），使用 RandomForest 进行
+        因子收益率预测。与 multi_factor 不同，本模型采用更丰富的
+        因子体系并显式区分因子类别。
+        """
+        try:
+            params = self._get_model_params('quant_factor')
+            min_data_required = params.get('min_data_required', 120)
+            n_factors = params.get('n_factors', 16)
+            window_size = params.get('window_size', 60)
+            prediction_horizon = params.get('prediction_horizon', 5)
+
+            if df is None or close_prices is None or len(close_prices) < min_data_required:
+                print(f"  ⚠️ 数据不足（最少需要{min_data_required}个点），跳过量化因子模型")
+                self.models['quant_factor'] = None
+                return
+
+            print(f"  ℹ️ 量化因子参数: factors={n_factors}, window={window_size}, horizon={prediction_horizon}")
+
+            from sklearn.ensemble import RandomForestRegressor
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.model_selection import train_test_split
+            from scipy import stats as sp_stats
+
+            # ---------- 构建 OHLCV DataFrame ----------
+            vol_arr = volume if volume is not None else close_prices
+            high_arr = high if high is not None else close_prices
+            low_arr = low if low is not None else close_prices
+            open_arr = open_prices if open_prices is not None else close_prices
+            min_len = min(len(close_prices), len(vol_arr),
+                          len(high_arr), len(low_arr),
+                          len(open_arr))
+            data = pd.DataFrame({
+                'close': close_prices[:min_len],
+                'volume': (volume[:min_len] if volume is not None
+                           else np.ones(min_len)),
+                'high': (high[:min_len] if high is not None
+                         else close_prices[:min_len]),
+                'low': (low[:min_len] if low is not None
+                        else close_prices[:min_len]),
+                'open': (open_prices[:min_len] if open_prices is not None
+                         else close_prices[:min_len]),
+            })
+            try:
+                data = data.ffill().bfill()
+            except Exception:
+                data = data.fillna(method='ffill').fillna(method='bfill')
+            data = data.fillna(0)
+
+            # ---------- 计算量化因子 ----------
+            def compute_quant_factors(raw_df, n_out):
+                """从 OHLCV 计算 16+ 个标准化量化因子"""
+                f = pd.DataFrame(index=raw_df.index)
+                c = raw_df['close'].values.copy()
+                v = raw_df['volume'].values.copy()
+                h = raw_df['high'].values.copy()
+                l = raw_df['low'].values.copy()
+                o = raw_df['open'].values.copy()
+                ret = np.array(pd.Series(c).pct_change().fillna(0))
+
+                # 1) 动量因子（多窗口）
+                for w in [5, 10, 20, 60]:
+                    if len(c) > w:
+                        mom = np.full(len(c), np.nan)
+                        mom[w:] = c[w:] / c[:-w] - 1.0
+                        f[f'momentum_{w}d'] = mom * 100
+                    else:
+                        f[f'momentum_{w}d'] = 0.0
+
+                # 2) 短期 / 长期动量比（趋势持续性）
+                if len(c) > 60:
+                    ratio = np.full(len(c), np.nan)
+                    short = c[20:] / c[:-20] - 1.0 if len(c) > 20 else np.zeros(len(c)-20)
+                    long_ = c[60:] / c[:-60] - 1.0 if len(c) > 60 else np.ones(len(c)-60)
+                    min_len_mr = min(len(short), len(long_))
+                    ratio[60:60+min_len_mr] = short[-min_len_mr:] / (long_[-min_len_mr:] + 1e-10)
+                    f['momentum_ratio'] = ratio
+                else:
+                    f['momentum_ratio'] = 0.0
+
+                # 3) 波动率因子
+                for w in [10, 20, 60]:
+                    vol = pd.Series(ret).rolling(w, min_periods=5).std().values * np.sqrt(252)
+                    f[f'volatility_{w}d'] = vol
+
+                # 4) 下行波动率（仅负收益）
+                neg_ret = np.where(ret < 0, ret, 0)
+                down_vol = pd.Series(neg_ret).rolling(20, min_periods=5).std().values * np.sqrt(252)
+                f['downside_volatility'] = down_vol
+
+                # 5) 偏度 / 峰度
+                skew_vals = np.full(len(c), np.nan)
+                kurt_vals = np.full(len(c), np.nan)
+                for i in range(20, len(c)):
+                    seg = ret[i-20:i]
+                    if np.std(seg) > 1e-10:
+                        skew_vals[i] = sp_stats.skew(seg)
+                        kurt_vals[i] = sp_stats.kurtosis(seg)
+                f['skewness_20d'] = np.nan_to_num(skew_vals, nan=0.0)
+                f['kurtosis_20d'] = np.nan_to_num(kurt_vals, nan=0.0)
+
+                # 6) 趋势强度（20日线性回归 R²）
+                trend_r2 = np.full(len(c), np.nan)
+                for i in range(20, len(c)):
+                    x = np.arange(20)
+                    y = c[i-20:i]
+                    try:
+                        _, _, rv, _, _ = sp_stats.linregress(x, y)
+                        trend_r2[i] = abs(rv)
+                    except Exception:
+                        trend_r2[i] = 0.0
+                f['trend_strength'] = np.nan_to_num(trend_r2, nan=0.0)
+
+                # 7) 均线交叉信号 MA5/20, MA20/60
+                def ma_series(arr, w):
+                    return pd.Series(arr).rolling(w, min_periods=1).mean().values
+                ma5 = ma_series(c, 5)
+                ma20 = ma_series(c, 20)
+                ma60 = ma_series(c, 60)
+                cross_5_20 = np.where(ma5 > ma20, 1.0, -1.0)
+                cross_20_60 = np.where(ma20 > ma60, 1.0, -1.0)
+                for i in range(60):
+                    cross_20_60[i] = 0.0  # warmup
+                for i in range(20):
+                    cross_5_20[i] = 0.0
+                f['ma_cross_5_20'] = cross_5_20
+                f['ma_cross_20_60'] = cross_20_60
+
+                # 8) 价格位置（N 日高低区间内的位置）
+                for w in [10, 20]:
+                    hh = pd.Series(h).rolling(w, min_periods=1).max().values
+                    ll = pd.Series(l).rolling(w, min_periods=1).min().values
+                    pos = (c - ll) / (hh - ll + 1e-10)
+                    f[f'price_position_{w}d'] = pos
+
+                # 9) 流动性因子 - Amihud 非流动性指标
+                daily_ret = np.abs(np.nan_to_num(ret, copy=True, nan=0.0))
+                amihud = np.full(len(c), np.nan)
+                for i in range(20, len(c)):
+                    seg_ret = daily_ret[i-20:i]
+                    seg_vol = v[i-20:i] + 1e-10
+                    amihud[i] = np.mean(seg_ret / seg_vol)
+                f['amihud_illiquidity'] = np.nan_to_num(amihud, nan=0.0) * 1e6  # 放大到易读尺度
+
+                # 10) 量比
+                vol_ma = pd.Series(v).rolling(20, min_periods=1).mean().values
+                f['volume_ratio'] = v / (vol_ma + 1e-10)
+
+                # 11) 量价背离指标（成交量与价格变化的相关性）
+                pv_corr = np.full(len(c), np.nan)
+                for i in range(20, len(c)):
+                    seg_c = np.diff(c[i-20:i+1])
+                    seg_v = v[i-20:i]
+                    if np.std(seg_c) > 1e-10 and np.std(seg_v) > 1e-10:
+                        pv_corr[i] = np.corrcoef(seg_c, seg_v)[0, 1]
+                    else:
+                        pv_corr[i] = 0.0
+                f['price_volume_divergence'] = np.nan_to_num(pv_corr, nan=0.0)
+
+                # 12) 资金流量指标 MFI（类似 RSI 但用成交额）
+                typical_price = (h + l + c) / 3.0
+                money_flow = typical_price * v
+                pos_flow = pd.Series(np.where(np.diff(np.concatenate([[c[0]], c])) > 0, money_flow, 0))
+                neg_flow = pd.Series(np.where(np.diff(np.concatenate([[c[0]], c])) < 0, money_flow, 0))
+                pos_sum = pos_flow.rolling(14, min_periods=1).sum().values
+                neg_sum = neg_flow.rolling(14, min_periods=1).sum().values + 1e-10
+                mfi = 100 - (100 / (1 + pos_sum / neg_sum))
+                f['mfi'] = mfi
+
+                # 填充 NaN / 截断至 n_out 列
+                try:
+                    f = f.ffill().bfill().fillna(0)
+                except Exception:
+                    f = f.fillna(method='ffill').fillna(method='bfill').fillna(0)
+
+                if len(f.columns) > n_out:
+                    variances = f.var()
+                    top_cols = variances.nlargest(n_out).index
+                    f = f[top_cols]
+                elif len(f.columns) < n_out:
+                    for i in range(n_out - len(f.columns)):
+                        f[f'aux_factor_{i}'] = 0.0
+                return f
+
+            X = compute_quant_factors(data, n_factors)
+
+            # ---------- 构造标签：未来 prediction_horizon 日收益率 ----------
+            future_returns = (data['close'].shift(-prediction_horizon) / data['close'] - 1) * 100
+
+            aligned_idx = X.index.intersection(future_returns.dropna().index)
+            X_aligned = X.loc[aligned_idx]
+            y_aligned = future_returns.loc[aligned_idx]
+
+            if len(X_aligned) < 60:
+                print(f"  ⚠️ 有效样本不足（{len(X_aligned)}），跳过量化因子模型")
+                self.models['quant_factor'] = None
+                return
+
+            # ---------- 训练 ----------
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_aligned.values)
+
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_scaled, y_aligned.values, test_size=0.2, random_state=42, shuffle=False
+            )
+
+            model = RandomForestRegressor(
+                n_estimators=params.get('n_estimators', 100),
+                max_depth=params.get('max_depth', 8),
+                min_samples_split=5,
+                min_samples_leaf=2,
+                random_state=42,
+                n_jobs=-1
+            )
+            model.fit(X_train, y_train)
+
+            train_score = model.score(X_train, y_train)
+            val_score = model.score(X_val, y_val)
+            feature_imp = model.feature_importances_
+
+            # ---------- 因子重要性排名 ----------
+            imp_df = pd.DataFrame({
+                'factor': X_aligned.columns,
+                'importance': feature_imp
+            }).sort_values('importance', ascending=False)
+
+            # top-5 因子
+            top5 = imp_df.head(5)
+            top5_str = ', '.join([f"{r['factor']}({r['importance']:.3f})"
+                                  for _, r in top5.iterrows()])
+
+            self.models['quant_factor'] = {
+                'model': model,
+                'scaler': scaler,
+                'factor_names': X_aligned.columns.tolist(),
+                'factor_importance': feature_imp.tolist(),
+                'top_factors': top5,
+                'train_score': train_score,
+                'val_score': val_score,
+                'window_size': window_size,
+                'prediction_horizon': prediction_horizon,
+                'n_factors': n_factors,
+                'last_factors': X_scaled[-1:],
+                'last_close': data['close'].iloc[-1],
+                'training_date': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+
+            print(f"  ✓ 量化因子模型训练完成")
+            print(f"    训练集 R²={train_score:.4f}, 验证集 R²={val_score:.4f}")
+            print(f"    因子数: {X_aligned.shape[1]}, 样本数: {len(X_aligned)}")
+            print(f"    Top-5 因子: {top5_str}")
+
+        except Exception as e:
+            print(f"  ❌ 量化因子模型训练失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            self.models['quant_factor'] = None
+
     def evaluate_models(self):
         """评估模型（包含新增模型）"""
         try:
@@ -1040,6 +1289,8 @@ class ModelFactory:
                         base_score = max(0, model_info['train_score'])
                 elif model_name == 'multi_factor':
                     base_score = max(0, model_info.get('test_score', 0.5))
+                elif model_name == 'quant_factor':
+                    base_score = max(0, model_info.get('val_score', 0.5))
                 elif model_name == 'lstm':
                     base_score = 0.6
                 elif model_name == 'ensemble':
@@ -1047,10 +1298,10 @@ class ModelFactory:
 
                 market_adjustment = 1.0
                 if self.market_regime == 'high_volatility':
-                    if model_name in ['garch', 'multi_factor', 'lightgbm']:
+                    if model_name in ['garch', 'multi_factor', 'lightgbm', 'quant_factor']:
                         market_adjustment = 1.2
                 elif self.market_regime == 'trending':
-                    if model_name in ['sarima', 'arima', 'lightgbm', 'catboost']:
+                    if model_name in ['sarima', 'arima', 'lightgbm', 'catboost', 'quant_factor']:
                         market_adjustment = 1.2
 
                 final_score = min(1.0, base_score * market_adjustment)

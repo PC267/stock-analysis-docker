@@ -3,9 +3,11 @@ import re
 from pathlib import Path
 from statistics import pstdev
 from urllib.parse import unquote
+from html import unescape
 
 ROOT = Path(__file__).resolve().parents[2]
 from .scoring import normalize_code, find_item, avg
+from .eastmoney import fetch_stock_industries
 
 def report_roots():
     return [ROOT/'app'/'results'/'reports', ROOT/'app'/'results', ROOT/'app'/'backtest_results']
@@ -41,12 +43,129 @@ def safe_report_path(rel):
     return None
 
 
+EN_ZH_ADVICE = {
+    'Extremely high risk, recommend avoiding operations': '风险极高：建议暂时回避，等待风险释放后再观察。',
+    'Recommend strict position control, set stop loss': '风险较高：建议严格控制仓位，并设置止损位。',
+    'Can participate with appropriate position control': '风险适中：可在控制仓位的前提下适度参与。',
+    'Low risk, suitable for stable holding': '风险较低：适合稳健持有，并持续跟踪趋势变化。',
+}
+
+RISK_LEVEL_ZH = {
+    'Extreme Risk': '极高',
+    'High Risk': '高',
+    'Medium Risk': '中',
+    'Low Risk': '低',
+    'Very Low Risk': '极低',
+    'Extremely High Risk': '极高',
+}
+
+
+def translate_advice(advice):
+    text = unescape(re.sub(r'<[^>]+>', '', str(advice or ''))).replace('&nbsp;', ' ').strip()
+    if not text:
+        return text
+    if re.search(r'[\u4e00-\u9fff]', text):
+        return text
+    if text in EN_ZH_ADVICE:
+        return EN_ZH_ADVICE[text]
+    low = text.lower()
+    if 'avoid' in low or 'extreme' in low:
+        return '风险极高：建议暂时回避，等待风险释放后再观察。'
+    if 'strict position control' in low or 'stop loss' in low or 'high risk' in low:
+        return '风险较高：建议严格控制仓位，并设置止损位。'
+    if 'appropriate position' in low or 'participate' in low or 'medium risk' in low:
+        return '风险适中：可在控制仓位的前提下适度参与。'
+    if 'low risk' in low or 'stable holding' in low:
+        return '风险较低：适合稳健持有，并持续跟踪趋势变化。'
+    if 'buy' in low:
+        return '建议：可结合趋势、成交量和风险指标审慎关注。'
+    if 'sell' in low:
+        return '建议：短线风险偏高，可考虑降低仓位或等待企稳。'
+    if 'hold' in low:
+        return '建议：可继续持有观察，注意仓位和止损纪律。'
+    return '建议：请结合趋势、成交量、风险指标和基本面综合判断。'
+
+
+def translate_risk_level(level):
+    text = unescape(str(level or '')).strip()
+    return RISK_LEVEL_ZH.get(text, text)
+
+
+def report_stock_code(name):
+    m = re.search(r'(?<!\d)(\d{6})(?!\d)', str(name or ''))
+    return m.group(1) if m else ''
+
+
+# 简单行业关键词映射（匹配股票名称中的关键词）
+_INDUSTRY_KEYWORDS = {
+    '科技': '科技', '电子': '电子', '芯片': '半导体', '半导体': '半导体',
+    '光电': '光电', '光学': '光电',
+    '医疗': '医疗', '医药': '医药', '药': '医药', '生物': '生物医药',
+    '新能源': '新能源', '光伏': '光伏', '风能': '新能源', '锂': '锂电池',
+    '汽车': '汽车', '汽配': '汽车零部件', '摩托': '汽车零部件',
+    '机器': '机器人', '智能': '人工智能', '数据': '大数据',
+    '通信': '通信', '信息': '信息技术', '软件': '软件',
+    '军工': '军工', '航天': '航天军工', '航空': '航天军工',
+    '家电': '家电', '电器': '家电', '日电': '家电', '海尔': '白色家电', '美菱': '白色家电',
+    '地产': '房地产', '房产': '房地产', '置业': '房地产',
+    '银行': '银行', '保险': '保险', '证券': '证券',
+    '消费': '消费', '食品': '食品饮料', '饮料': '食品饮料', '乳业': '食品饮料',
+    '化工': '化工', '化学': '化工', '材料': '新材料', '新材': '新材料', '纤维': '化工',
+    '电力': '电力', '能源': '能源', '电驱': '电气设备', '电气': '电气设备',
+    '环保': '环保', '环境': '环保', '水': '环保', '水务': '环保',
+    '机械': '机械设备', '装备': '机械设备', '机床': '机械设备', '机电': '机械设备',
+    '建设': '基建', '建筑': '基建', '筑': '基建',
+    '传媒': '传媒', '影视': '传媒',
+    '农牧': '农牧', '农业': '农牧',
+    '有色': '有色金属', '钢铁': '钢铁',
+    '纺织': '纺织服装', '服装': '纺织服装',
+    '交运': '交通运输', '运输': '交通运输',
+    '玻璃': '玻璃', '巨石': '玻璃纤维', '玻纤': '玻璃纤维',
+    '动力': '动力设备', '驱动': '电气设备', '电驱': '电气设备',
+    '微': '电子', '元件': '电子元件', '电路': '电子',
+    '新材': '新材料', '材料': '新材料',
+    '精密': '精密制造', '精测': '精密测量',
+    '创投': '金融', '投资': '金融',
+    '制药': '医药', '药业': '医药',
+    '航空': '航天军工', '航天': '航天军工',
+    '食品': '食品饮料', '饮品': '食品饮料', '糖': '食品饮料',
+    '网络': '信息技术', '互联': '信息技术', '数码': '电子',
+    '制造': '制造业', '工业': '工业',
+    '电机': '电气设备', '电驱': '电气设备', '驱动': '电气设备',
+    '膜': '环保设备', '水务': '环保', '水处理': '环保',
+    '配件': '汽车零部件', '轴承': '机械设备',
+    '蔚蓝': '生物医药',
+    '维格': '电子', '迪凯': '电子', '派格': '信息技术',
+    '研奥': '轨道交通', '醋化': '化工', '华康': '食品饮料',
+    '劲拓': '机械设备', '诺瓦': '电子', '天通': '电子',
+    '鼎泰': '机械设备', '深科': '电子', '鸿利': '电子',
+    '凡拓': '信息技术', '佳创': '信息技术', '清越': '电子',
+    '盛美': '半导体', '中科': '半导体', '华海': '半导体',
+}
+
+def get_stock_industry(code, name):
+    """根据股票代码获取所属行业（东方财富API缓存 + 关键词备用）"""
+    if not code or len(code) != 6:
+        return []
+    # 优先使用EM API缓存数据
+    result = fetch_stock_industries([code])
+    industry = result.get(code, '')
+    if industry:
+        return [industry]
+    # API未覆盖时用关键词匹配备用
+    if name:
+        matched = [v for k, v in _INDUSTRY_KEYWORDS.items() if k in name and v]
+        if matched:
+            return [matched[0]]
+    return ['']
+
+
 def extract_html_metrics(path):
     metrics = {}
     try:
         text = Path(path).read_text(encoding='utf-8', errors='ignore')
         def clean(v):
-            return re.sub(r'<[^>]+>', '', v or '').replace('&nbsp;', ' ').strip()
+            return unescape(re.sub(r'<[^>]+>', '', v or '').replace('&nbsp;', ' ')).strip()
         def stat(label):
             m = re.search(r'<div class="stat-label"[^>]*>[^<]*' + label + r'[^<]*</div>\s*<div class="stat-value[^"]*"[^>]*>(.*?)</div>', text, re.I | re.S)
             return clean(m.group(1)) if m else None
@@ -60,8 +179,7 @@ def extract_html_metrics(path):
             return round(float(m.group(1)), 2 if percent else 3)
         risk_level_raw = stat('Risk Level')
         if risk_level_raw:
-            level_map = {'Extreme Risk':'极高', 'High Risk':'高', 'Medium Risk':'中', 'Low Risk':'低', 'Very Low Risk':'极低'}
-            metrics['risk_level'] = level_map.get(risk_level_raw, risk_level_raw)
+            metrics['risk_level'] = translate_risk_level(risk_level_raw)
         risk_score_raw = stat('Risk Score')
         if risk_score_raw:
             m = re.search(r'([+-]?\d+(?:\.\d+)?)\s*/\s*1(?:\.0)?', risk_score_raw)
@@ -87,7 +205,7 @@ def extract_html_metrics(path):
             metrics['win_rate'] = v
         advice = stat('📋 Investment Suggestion') or stat('Investment Suggestion')
         if advice:
-            metrics['advice'] = advice
+            metrics['advice'] = translate_advice(advice)
     except Exception:
         pass
     return metrics
@@ -100,9 +218,14 @@ def report_display_name(filename):
     m = re.match(r'^(\d{6})_([^_]+)', filename or '')
     return f"{m.group(1)}_{m.group(2)}" if m else (filename or '')
 
-def report_metrics_from_name(name, stat, path=None):
+def report_metrics_from_name(name, stat, path=None, html_only=False):
     html_metrics = extract_html_metrics(path) if path else {}
-    code = normalize_code(name)
+    if html_only:
+        # HTML 已包含全部指标，跳过 find_item()（读 CSV+HTTP 取行情+全量计算）
+        metrics = {'risk_level':'低','risk_score':0,'volatility':None,'max_drawdown':html_metrics.get('total_return'),'total_return':html_metrics.get('total_return'),'sharpe':None,'win_rate':None,'advice':'请查阅报告详情'}
+        metrics.update({k:(translate_advice(v) if k == 'advice' else translate_risk_level(v) if k == 'risk_level' else v) for k,v in html_metrics.items() if v is not None and v != ''})
+        return metrics
+    code = report_stock_code(name) or normalize_code(name)
     item, rows = find_item(code) if code and len(code)==6 else (None, [])
     vol = item.get('volatility') if item else None
     dd = item.get('drawdown') if item else None
@@ -124,6 +247,6 @@ def report_metrics_from_name(name, stat, path=None):
     if risk_level == '高': advice='高风险：控制仓位，等待波动和回撤收敛后再观察。'
     elif risk_level == '中': advice='中等风险：可小仓位跟踪，重点观察趋势延续和止损位。'
     else: advice='低风险：走势相对稳定，可结合评分和基本面继续筛选。'
-    metrics = {'risk_level':risk_level,'risk_score':risk_score,'volatility':vol,'max_drawdown':total_return,'total_return':total_return,'sharpe':sharpe,'win_rate':win,'advice':advice}
-    metrics.update({k:v for k,v in html_metrics.items() if v is not None and v != ''})
+    metrics = {'risk_level':risk_level,'risk_score':risk_score,'volatility':vol,'max_drawdown':total_return,'total_return':total_return,'sharpe':sharpe,'win_rate':win,'advice':translate_advice(advice)}
+    metrics.update({k:(translate_advice(v) if k == 'advice' else translate_risk_level(v) if k == 'risk_level' else v) for k,v in html_metrics.items() if v is not None and v != ''})
     return metrics
