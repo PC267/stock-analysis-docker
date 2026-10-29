@@ -10,9 +10,15 @@ _csv_cache = {}
 _csv_cache_lock = threading.Lock()
 # 目录扫描缓存：按 DATA_DIR mtime 失效，避免每次全量 glob
 _paths_cache = {'key': None, 'data': ({}, [])}
-# load_items 结果缓存：30 秒 TTL，热刷新不重算
+# load_items 结果缓存：300 秒 TTL，热刷新不重算
 _items_cache = {'ts': 0.0, 'data': None}
 _ITEMS_CACHE_TTL = 300
+# 单飞锁：多个并发请求在缓存失效时只让一个线程重算，其余等待结果（防惊群）
+_items_cache_lock = threading.Lock()
+_items_cache_recompute = {'active': False}
+
+# 新浪批量行情单次请求代码数上限（实测 400 只 0.3s，接口通常支持 ~800）
+_SINA_BATCH_MAX = 500
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / 'app' / 'stock_data'
@@ -58,10 +64,23 @@ def parse_name(path):
 
 def read_stock(path):
     rows=[]
+    # 用原生 csv.reader 避免 DictReader 每行构造字典；内联 float 转换避免 to_float 的 str 开销
     with path.open('r',encoding='utf-8-sig',newline='') as f:
-        for r in csv.DictReader(f):
-            close=to_float(r.get('close'))
-            if close and close>0: rows.append({'date':r.get('date',''),'open':to_float(r.get('open'),close),'high':to_float(r.get('high'),close),'low':to_float(r.get('low'),close),'close':close,'volume':to_float(r.get('volume'),0) or 0,'pctChg':to_float(r.get('pctChg'),0) or 0})
+        reader=csv.reader(f)
+        next(reader, None)  # 跳过表头
+        append=rows.append
+        for r in reader:
+            if len(r) < 7:
+                continue
+            try:
+                close=float(r[4])
+            except (ValueError, TypeError):
+                continue
+            if close and close > 0:
+                try:
+                    append({'date':r[0],'open':float(r[1]) if r[1] else close,'high':float(r[2]) if r[2] else close,'low':float(r[3]) if r[3] else close,'close':close,'volume':float(r[5]) if r[5] else 0,'pctChg':float(r[6]) if r[6] else 0})
+                except (ValueError, TypeError):
+                    continue
     rows.sort(key=lambda x:x['date']); return rows
 
 def fetch_sina_quote(code):
@@ -93,19 +112,70 @@ def fetch_realtime_quote(code):
     return fetch_sina_quote(code) or fetch_tencent_quote(code)
 
 
-def batch_fetch_realtime_quotes(codes):
-    """并行批量获取多只股票实时行情，显著减少串行 HTTP 请求耗时。"""
+def _parse_sina_batch(raw, quotes):
+    """解析新浪批量返回，格式为多行 `var hq_str_<sec>="...";`。"""
+    for m in re.finditer(r'var hq_str_((?:sh|sz)\d{6})="([^"]*)"', raw):
+        sec, body = m.group(1), m.group(2)
+        parts = body.split(',')
+        code = sec[2:]
+        if len(parts) < 32 or not parts[0]:
+            continue
+        prev = to_float(parts[2]); price = to_float(parts[3]) or prev
+        if not price:
+            continue
+        quotes[code] = {
+            'date': parts[30] or date.today().isoformat(),
+            'open': to_float(parts[1], price), 'high': to_float(parts[4], price),
+            'low': to_float(parts[5], price), 'close': price,
+            'volume': to_float(parts[8], 0) or 0,
+            'pctChg': ((price / prev - 1) * 100 if prev else 0),
+            'source': 'sina_realtime',
+        }
+
+
+def fetch_sina_quotes_batch(codes):
+    """用新浪批量接口一次请求多只代码，极大减少网络往返。
+
+    实测：单次请求 400 只约 0.3s；逐只请求在慢网络下每个 5s 超时，852 只最坏几十分钟。
+    返回 {code: quote}；失败或空结果返回 {}。
+    """
+    if not codes:
+        return {}
+    secs = [('sh' if c.startswith(('6', '9')) else 'sz') + c for c in codes]
     quotes = {}
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        fut_map = {pool.submit(fetch_realtime_quote, code): code for code in codes}
-        for fut in as_completed(fut_map):
-            code = fut_map[fut]
-            try:
-                result = fut.result()
-                if result:
-                    quotes[code] = result
-            except Exception:
-                pass
+    headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.sina.com.cn/'}
+    for i in range(0, len(secs), _SINA_BATCH_MAX):
+        chunk = secs[i:i + _SINA_BATCH_MAX]
+        url = 'https://hq.sinajs.cn/list=' + ','.join(chunk)
+        try:
+            raw = urllib.request.urlopen(
+                urllib.request.Request(url, headers=headers), timeout=8).read(400000).decode('gb18030', 'ignore')
+            _parse_sina_batch(raw, quotes)
+        except Exception:
+            # 批量失败时回退：对该批次内未获取到的逐只重试一次（腾讯备用）
+            missing = [s[2:] for s in chunk if s[2:] not in quotes]
+            for code in missing:
+                q = fetch_realtime_quote(code)
+                if q:
+                    quotes[code] = q
+    return quotes
+
+
+def batch_fetch_realtime_quotes(codes):
+    """批量获取多只股票实时行情：优先新浪批量接口，失败逐只回退。"""
+    quotes = fetch_sina_quotes_batch(codes)
+    # 若批量接口整体失败导致全空，且代码数量不大，用旧并行方式兜底
+    if not quotes and len(codes) <= 60:
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            fut_map = {pool.submit(fetch_realtime_quote, code): code for code in codes}
+            for fut in as_completed(fut_map):
+                code = fut_map[fut]
+                try:
+                    result = fut.result()
+                    if result:
+                        quotes[code] = result
+                except Exception:
+                    pass
     return quotes
 
 def merge_realtime_row(code, rows):
@@ -237,7 +307,7 @@ def _read_stock_cached(path):
 
 
 def load_items(return_deleted=False):
-    # 30 秒 TTL 缓存：热刷新跳过全量重算
+    # 300 秒 TTL 缓存：热刷新跳过全量重算
     now = time.time()
     if _items_cache['data'] is not None and (now - _items_cache['ts']) < _ITEMS_CACHE_TTL:
         cached_out, cached_del = _items_cache['data']
@@ -245,6 +315,34 @@ def load_items(return_deleted=False):
         del_list = [dict(x) for x in cached_del]
         return (out, del_list) if return_deleted else out
 
+    # 单飞：缓存失效时只让一个线程重算，其余线程等待结果，避免惊群（N 个并发同时全量重算）
+    with _items_cache_lock:
+        now = time.time()
+        if _items_cache['data'] is not None and (now - _items_cache['ts']) < _ITEMS_CACHE_TTL:
+            cached_out, cached_del = _items_cache['data']
+            out = [dict(x) for x in cached_out]
+            del_list = [dict(x) for x in cached_del]
+            return (out, del_list) if return_deleted else out
+        if _items_cache_recompute['active']:
+            # 已有线程在重算：等待其完成（轮询缓存时间戳）
+            deadline = now + 120
+            while time.time() < deadline and _items_cache_recompute['active']:
+                time.sleep(0.2)
+            if _items_cache['data'] is not None:
+                cached_out, cached_del = _items_cache['data']
+                out = [dict(x) for x in cached_out]
+                del_list = [dict(x) for x in cached_del]
+                return (out, del_list) if return_deleted else out
+        _items_cache_recompute['active'] = True
+
+    try:
+        return _load_items_unlocked(return_deleted)
+    finally:
+        with _items_cache_lock:
+            _items_cache_recompute['active'] = False
+
+
+def _load_items_unlocked(return_deleted=False):
     out = []
     paths, deleted = latest_stock_paths(cleanup=True)
 
@@ -254,7 +352,7 @@ def load_items(return_deleted=False):
         _, n = parse_name(path)
         code_info[c] = {'name': n, 'path': path, 'rows': _read_stock_cached(path)}
 
-    # Phase 2: 并行获取所有股票实时行情
+    # Phase 2: 批量获取所有股票实时行情
     codes = list(code_info.keys())
     quotes = batch_fetch_realtime_quotes(codes)
 

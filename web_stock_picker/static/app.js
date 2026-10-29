@@ -1,3 +1,4 @@
+const _f=window.fetch;window.fetch=async(...a)=>{const r=await _f(...a);if(r.status===401){location.href='/login?next='+encodeURIComponent(location.pathname);throw new Error('unauthorized')}return r};
 async function loadStocks() {
   const s = document.getElementById('strategy').value;
   const k = document.getElementById('keyword').value;

@@ -19,3 +19,4 @@ PyYAML>=6.0.0
 pykalman>=0.10.0
 psutil>=5.9.0
 plotly>=5.0.0
+waitress>=3.0.0

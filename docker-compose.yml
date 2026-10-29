@@ -15,18 +15,27 @@ services:
         hard: 1024
 
     environment:
+      SECRET_KEY: "${SECRET_KEY:?需要设置}"
+      AUTH_DATA: "/data/auth"
       WEB_STOCK_PICKER_PORT: "9119"
-      TZ: Asia/Shanghai
-      REPORT_OUTPUT_DIR: /work/app/results/reports
+      TZ: "Asia/Shanghai"
+      REPORT_OUTPUT_DIR: "/work/app/results/reports"
     volumes:
       - ./app/stock_data:/work/app/stock_data
       - ./app/model:/work/app/model
       - ./app/results:/work/app/results
       - ./app/backtest_results:/work/app/backtest_results
       - ./web_stock_picker:/work/web_stock_picker
+      - ./auth-data:/data/auth
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9119/health', timeout=5).read()"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
+    # 日志轮转：避免容器日志无限增长
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

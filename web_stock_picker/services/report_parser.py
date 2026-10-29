@@ -12,6 +12,17 @@ from .eastmoney import fetch_stock_industries
 def report_roots():
     return [ROOT/'app'/'results'/'reports', ROOT/'app'/'results', ROOT/'app'/'backtest_results']
 
+# safe_report_path 结果缓存：name -> Path|None，按根目录 mtime 失效，避免未命中时全盘 rglob
+_report_path_cache = {'key': None, 'data': {}}
+
+
+def _report_roots_key():
+    try:
+        return tuple((str(r), r.stat().st_mtime_ns, r.stat().st_size) for r in report_roots() if r.exists())
+    except Exception:
+        return None
+
+
 def safe_report_path(rel):
     raw = unquote(rel or '').lstrip('/')
     candidates = [raw]
@@ -21,15 +32,58 @@ def safe_report_path(rel):
             candidates.append(fixed)
     except Exception:
         pass
+
+    # 1) 先按名字在根目录直接拼路径（O(1)），命中即返回
     for root in report_roots():
         if not root.exists():
             continue
         try:
             rr = root.resolve()
             for name in candidates:
+                if not name or name.startswith('..') or '/' in name:
+                    continue
                 p = (root / name).resolve()
                 if p.is_file() and (p == rr or rr in p.parents):
                     return p
+        except Exception:
+            pass
+
+    # 2) 未命中且候选是纯文件名时，查缓存（按根目录状态失效），避免全盘 rglob
+    only_names = all(n and '/' not in n and '\\' not in n for n in candidates)
+    if only_names:
+        key = _report_roots_key()
+        if key is None:
+            return None
+        if _report_path_cache['key'] != key:
+            # 重建：为三个根目录各自建立 name->path 映射（只扫一次，之后命中缓存）
+            _report_path_cache['data'] = {}
+            for root in report_roots():
+                if not root.exists():
+                    continue
+                try:
+                    rr = root.resolve()
+                    for x in root.rglob('*'):
+                        if not x.is_file():
+                            continue
+                        xp = x.resolve()
+                        if not (xp == rr or rr in xp.parents):
+                            continue
+                        _report_path_cache['data'][x.name] = xp
+                except Exception:
+                    pass
+            _report_path_cache['key'] = key
+        for name in candidates:
+            hit = _report_path_cache['data'].get(name)
+            if hit:
+                return hit
+        return None
+
+    # 3) 含子路径的候选，做有限 rglob 回退（少见路径）
+    for root in report_roots():
+        if not root.exists():
+            continue
+        try:
+            rr = root.resolve()
             for x in root.rglob('*'):
                 if not x.is_file():
                     continue

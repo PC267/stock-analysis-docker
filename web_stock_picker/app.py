@@ -14,6 +14,14 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / 'app' / 'stock_data'
 PORT = int(os.environ.get('WEB_STOCK_PICKER_PORT', '9119'))
 
+# ---- Basic Auth 配置 ----
+# 凭据通过环境变量注入；缺省 admin/admin（仅供本机/内网测试，生产务必修改）
+AUTH_USER = os.environ.get('WEB_STOCK_PICKER_USER', 'admin')
+AUTH_PASS = os.environ.get('WEB_STOCK_PICKER_PASS', 'admin')
+AUTH_REALM = 'Web Stock Picker'
+# 需要认证的路径前缀：API 与报告（含删除/训练/回测等破坏性操作）
+AUTH_PREFIXES = ('/api', '/reports')
+
 INDEX_HTML = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Web选股系统</title><link rel="stylesheet" href="/static/style.css"></head><body><div class="wrap"><header><h1>Web选股系统</h1><p>选股 / 回测 / 重型AI训练 / 报告</p></header><nav class="tabs"><button data-tab="picker" class="active">选股评分</button><button data-tab="backtest">回测</button><button data-tab="heavyai">重型AI训练</button><button data-tab="reports">报告结果</button></nav><section id="picker" class="panel active"><div class="toolbar"><select id="strategy"><option value="balanced">综合评分</option><option value="momentum">趋势动量</option><option value="volume_breakout">放量突破</option><option value="oversold">超跌修复</option></select><input id="keyword" placeholder="股票代码/名称"><input id="limit" type="number" value="50"><button id="refresh">刷新</button><button id="downloadHistory">更新历史数据</button><span id="status"></span></div><div class="tablebox"><table><thead><tr><th data-sort="rank">排名 <span class="sort-arrows"><button onclick="sortStocks('rank','asc')">&#9650;</button><button onclick="sortStocks('rank','desc')">&#9660;</button></span></th><th data-sort="code">代码 <span class="sort-arrows"><button onclick="sortStocks('code','asc')">&#9650;</button><button onclick="sortStocks('code','desc')">&#9660;</button></span></th><th data-sort="name">名称 <span class="sort-arrows"><button onclick="sortStocks('name','asc')">&#9650;</button><button onclick="sortStocks('name','desc')">&#9660;</button></span></th><th data-sort="signal">信号 <span class="sort-arrows"><button onclick="sortStocks('signal','asc')">&#9650;</button><button onclick="sortStocks('signal','desc')">&#9660;</button></span></th><th data-sort="score">评分 <span class="sort-arrows"><button onclick="sortStocks('score','asc')">&#9650;</button><button onclick="sortStocks('score','desc')">&#9660;</button></span></th><th data-sort="price">最新价 <span class="sort-arrows"><button onclick="sortStocks('price','asc')">&#9650;</button><button onclick="sortStocks('price','desc')">&#9660;</button></span></th><th data-sort="change_pct">涨跌幅 <span class="sort-arrows"><button onclick="sortStocks('change_pct','asc')">&#9650;</button><button onclick="sortStocks('change_pct','desc')">&#9660;</button></span></th><th data-sort="ma">MA5/20/60 <span class="sort-arrows"><button onclick="sortStocks('ma','asc')">&#9650;</button><button onclick="sortStocks('ma','desc')">&#9660;</button></span></th><th data-sort="rsi14">RSI <span class="sort-arrows"><button onclick="sortStocks('rsi14','asc')">&#9650;</button><button onclick="sortStocks('rsi14','desc')">&#9660;</button></span></th><th data-sort="volume_ratio">量比 <span class="sort-arrows"><button onclick="sortStocks('volume_ratio','asc')">&#9650;</button><button onclick="sortStocks('volume_ratio','desc')">&#9660;</button></span></th><th data-sort="momentum20">20日动量 <span class="sort-arrows"><button onclick="sortStocks('momentum20','asc')">&#9650;</button><button onclick="sortStocks('momentum20','desc')">&#9660;</button></span></th><th data-sort="drawdown">最大回撤 <span class="sort-arrows"><button onclick="sortStocks('drawdown','asc')">&#9650;</button><button onclick="sortStocks('drawdown','desc')">&#9660;</button></span></th><th data-sort="kline_score">K线模拟 <span class="sort-arrows"><button onclick="sortStocks('kline_score','asc')">&#9650;</button><button onclick="sortStocks('kline_score','desc')">&#9660;</button></span></th><th>操作</th><th data-sort="data_source">数据源 <span class="sort-arrows"><button onclick="sortStocks('data_source','asc')">&#9650;</button><button onclick="sortStocks('data_source','desc')">&#9660;</button></span></th><th data-sort="tags">标签 <span class="sort-arrows"><button onclick="sortStocks('tags','asc')">&#9650;</button><button onclick="sortStocks('tags','desc')">&#9660;</button></span></th></tr></thead><tbody id="tbody"></tbody></table></div></section><section id="backtest" class="panel"><h2>回测模块</h2><div class="toolbar"><input id="backtestCode" placeholder="股票代码，可留空"><input id="backtestDays" type="number" value="20"><button id="backtestRun">运行 backtest.py 回测</button></div><pre id="backtestResult" class="result"></pre></section><section id="heavyai" class="panel"><h2>重型AI训练</h2><div class="toolbar heavyai-toolbar"><input id="aiCode" class="ai-code" placeholder="股票代码"><input id="aiName" class="ai-name" placeholder="股票名称"><input id="aiDays" class="ai-days" type="number" value="20" title="模拟天数"><select id="aiMode" class="ai-mode"><option value="single">单股训练</option><option value="custom_batch">自定义批量</option><option value="industry_5d">行业资金5日前三</option><option value="industry_10d">行业资金10日前三</option></select><input id="aiLimit" class="ai-limit" type="number" value="3" title="每个行业训练股票数"><button id="aiRun">启动训练</button><button id="aiStatusBtn">刷新状态</button></div><textarea id="aiProjects" class="ai-projects" placeholder="自定义训练项目：每行一个，如：300088 长信科技&#10;600519 贵州茅台"></textarea><div class="toolbar ai-schedule"><label class="schedule-check"><input id="aiScheduleEnabled" type="checkbox"> 定时开启</label><input id="aiScheduleTime" class="ai-time" type="time" value="09:30"><button id="aiScheduleSave">保存定时</button><span id="aiScheduleStatus"></span></div><pre id="aiResult" class="result"></pre></section><section id="reports" class="panel"><h2>报告结果</h2><div class="toolbar"><button id="reportsLoad">刷新报告列表</button><span id="reportsStatus"></span></div><div class="tablebox report-tablebox"><table class="report-table"><thead><tr><th data-sort="idx">序号 <span class="sort-arrows"><button onclick="sortReports('idx','asc')">&#9650;</button><button onclick="sortReports('idx','desc')">&#9660;</button></span></th><th data-sort="name">报告名称 <span class="sort-arrows"><button onclick="sortReports('name','asc')">&#9650;</button><button onclick="sortReports('name','desc')">&#9660;</button></span></th><th data-sort="industry">行业</th><th data-sort="risk_level">风险等级 <span class="sort-arrows"><button onclick="sortReports('risk_level','asc')">&#9650;</button><button onclick="sortReports('risk_level','desc')">&#9660;</button></span></th><th data-sort="risk_score">风险评分 <span class="sort-arrows"><button onclick="sortReports('risk_score','asc')">&#9650;</button><button onclick="sortReports('risk_score','desc')">&#9660;</button></span></th><th data-sort="volatility">波动率 <span class="sort-arrows"><button onclick="sortReports('volatility','asc')">&#9650;</button><button onclick="sortReports('volatility','desc')">&#9660;</button></span></th><th data-sort="max_drawdown">Total Return <span class="sort-arrows"><button onclick="sortReports('max_drawdown','asc')">&#9650;</button><button onclick="sortReports('max_drawdown','desc')">&#9660;</button></span></th><th data-sort="sharpe">夏普比率 <span class="sort-arrows"><button onclick="sortReports('sharpe','asc')">&#9650;</button><button onclick="sortReports('sharpe','desc')">&#9660;</button></span></th><th data-sort="win_rate">胜率 <span class="sort-arrows"><button onclick="sortReports('win_rate','asc')">&#9650;</button><button onclick="sortReports('win_rate','desc')">&#9660;</button></span></th><th>操作</th><th data-sort="mtime">修改时间 <span class="sort-arrows"><button onclick="sortReports('mtime','asc')">&#9650;</button><button onclick="sortReports('mtime','desc')">&#9660;</button></span></th><th data-sort="advice">分析建议 <span class="sort-arrows"><button onclick="sortReports('advice','asc')">&#9650;</button><button onclick="sortReports('advice','desc')">&#9660;</button></span></th></tr></thead><tbody id="reportsBox"></tbody></table></div></section></div><script src="/static/app.js"></script></body></html>'''
 APP_JS = '''function q(id){return document.getElementById(id)}document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tabs button,.panel').forEach(x=>x.classList.remove('active'));b.classList.add('active');q(b.dataset.tab).classList.add('active')});async function gj(u){return await (await fetch(u)).json()}async function pj(u,o){return await (await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)})).json()}
 let stockItems=[];let stockSort={key:'rank',dir:'asc'};function stockSortValue(x,k){if(k==='ma')return Number(x.ma20??-999999);if(k==='tags')return (x.tags||[]).join(',');if(['rank','score','price','change_pct','rsi14','volume_ratio','momentum20','drawdown','kline_score'].includes(k))return Number(x[k]??-999999);if(k==='data_source')return x.data_fresh?'实时':'CSV';return String(x[k]??'')}function sortStocks(k,d){stockSort={key:k,dir:d};renderStocks()}function renderStocks(){let arr=[...stockItems];arr.sort((a,b)=>{let av=stockSortValue(a,stockSort.key),bv=stockSortValue(b,stockSort.key);let r=(typeof av==='number'&&typeof bv==='number')?av-bv:String(av).localeCompare(String(bv),'zh-CN');return stockSort.dir==='asc'?r:-r});let tb=q('tbody');tb.innerHTML='';for(let i=0;i<arr.length;i++){let x=arr[i],tr=document.createElement('tr');tr.innerHTML=`<td>${i+1}</td><td class="code">${x.code}</td><td>${x.name}</td><td><span class="sig">${x.signal}</span></td><td class="score">${x.score}</td><td>${x.price}</td><td class="${x.change_pct>=0?'red':'green'}">${x.change_pct}%</td><td>${x.ma5??'-'} / ${x.ma20??'-'} / ${x.ma60??'-'}</td><td>${x.rsi14??'-'}</td><td>${x.volume_ratio??'-'}</td><td>${x.momentum20??'-'}%</td><td>${x.drawdown??'-'}%</td><td>${x.kline_score??'-'} / ${x.sim_return??'-'}%</td><td><button class="danger" onclick="deleteStock('${x.code}','${(x.name||'').replace(/'/g,\"\\'\")}')">删除</button></td><td>${x.data_fresh?'实时':'CSV'}</td><td>${(x.tags||[]).map(t=>`<span class="tag">${t}</span>`).join('')}</td>`;tb.appendChild(tr)}}async function deleteStock(code,name){if(!confirm('确认删除个股：'+code+' '+name+' ?'))return;let r=await fetch('/api/stocks/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});let d=await r.json();if(!d.ok){alert(d.error||'删除失败');return}await loadStocks()}async function loadStocks(){let s=q('strategy').value,k=q('keyword').value,l=q('limit').value||50;q('status').textContent='加载中...';let d=await gj(`/api/stocks?strategy=${s}&limit=${l}&keyword=${encodeURIComponent(k)}`);stockItems=d.items||[];renderStocks();q('status').textContent=`${d.updated_at} · ${d.count}只 · 排序 ${stockSort.key} ${stockSort.dir==='asc'?'↑':'↓'}`}q('refresh').onclick=loadStocks;q('downloadHistory').onclick=async()=>{let k=q('keyword').value.trim();if(!k&&!confirm('未输入股票代码/名称，将更新全部CSV，可能耗时较长，继续？'))return;q('status').textContent='历史数据更新中...';try{let d=await pj('/api/history/update',{keyword:k});q('status').textContent=`更新完成：${d.updated} 个，失败 ${d.failed}`;await loadStocks()}catch(e){q('status').textContent='更新失败：'+e}};q('strategy').onchange=loadStocks;q('keyword').onkeydown=e=>{if(e.key==='Enter')loadStocks()};
@@ -24,6 +32,38 @@ STYLE_CSS = '''body{margin:0;background:#0f172a;color:#e5e7eb;font-family:-apple
 
 
 AI_JOBS = {}
+
+# 报告列表缓存：60 秒 TTL，GET 请求只读缓存，避免每次全盘扫描 + 删除副作用
+_REPORTS_CACHE = {'ts': 0.0, 'data': None}
+_REPORTS_CACHE_TTL = 60
+_REPORTS_CACHE_LOCK = threading.Lock()
+
+# 报告清理线程：把 cleanup_duplicate_reports_by_code 从 GET 路径中移出，
+# 改为周期性后台清理（清理会 unlink 文件，不应在只读请求里执行）
+_REPORT_CLEANUP_INTERVAL = 600  # 10 分钟
+_report_cleanup_started = False
+
+
+def _reports_cleanup_loop():
+    while True:
+        try:
+            cleanup_duplicate_reports_by_code()
+        except Exception:
+            pass
+        time.sleep(_REPORT_CLEANUP_INTERVAL)
+
+
+def start_report_cleanup_once():
+    global _report_cleanup_started
+    if not _report_cleanup_started:
+        _report_cleanup_started = True
+        t = threading.Thread(target=_reports_cleanup_loop, daemon=True)
+        t.start()
+
+# 回测并发信号量：限制同时运行的 backtest 子进程数，防止高并发下线程/内存堆积
+_BACKTEST_SEM = threading.Semaphore(2)
+# 历史数据更新并发信号量：限制同时运行的 baostock 更新任务
+_HISTORY_UPDATE_SEM = threading.Semaphore(1)
 
 AI_SCHEDULE_PATH = ROOT / 'web_stock_picker' / 'runtime' / 'ai_schedule.json'
 AI_SCHEDULE_LOCK = threading.Lock()
@@ -491,21 +531,26 @@ def history_update_payload(body):
         files.append((path,code,name))
     if not files:
         return {'ok':False,'updated':0,'failed':0,'items':[],'errors':['未找到匹配CSV']}
-    import baostock as bs
-    lg=bs.login()
-    if lg.error_code!='0':
-        return {'ok':False,'updated':0,'failed':len(files),'items':[],'errors':['baostock登录失败: '+lg.error_msg]}
-    items=[]; errors=[]
+    if not _HISTORY_UPDATE_SEM.acquire(timeout=30):
+        return {'ok':False,'updated':0,'failed':len(files),'items':[],'errors':['已有历史更新任务在运行，请稍后重试']}
     try:
-        for path,code,name in files:
-            try:
-                items.append(update_history_for_file(path,code,name))
-            except Exception as e:
-                errors.append({'code':code,'name':name,'error':str(e)})
+        import baostock as bs
+        lg=bs.login()
+        if lg.error_code!='0':
+            return {'ok':False,'updated':0,'failed':len(files),'items':[],'errors':['baostock登录失败: '+lg.error_msg]}
+        items=[]; errors=[]
+        try:
+            for path,code,name in files:
+                try:
+                    items.append(update_history_for_file(path,code,name))
+                except Exception as e:
+                    errors.append({'code':code,'name':name,'error':str(e)})
+        finally:
+            try: bs.logout()
+            except Exception: pass
+        return {'ok':not errors,'updated':len(items),'failed':len(errors),'items':items,'errors':errors,'data_dir':str(DATA_DIR),'updated_at':datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     finally:
-        try: bs.logout()
-        except Exception: pass
-    return {'ok':not errors,'updated':len(items),'failed':len(errors),'items':items,'errors':errors,'data_dir':str(DATA_DIR),'updated_at':datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        _HISTORY_UPDATE_SEM.release()
 
 def backtest_payload(b):
     code = normalize_code(b.get('code',''))
@@ -561,7 +606,13 @@ for stock_file in {stock_files!r}:
 print(json.dumps({{"ok": len(errors)==0, "module": "app/backtest.py", "days": {days}, "count": len(out), "items": out, "errors": errors}}, ensure_ascii=False))
 '''
     try:
-        cp = subprocess.run([ai_python_cmd(), '-c', script], cwd=str(ROOT/'app'), text=True, capture_output=True, timeout=900)
+        # 限制并发回测数，获取不到许可 60s 后放弃（避免线程堆积）
+        if not _BACKTEST_SEM.acquire(timeout=60):
+            return {'ok': False, 'module': 'app/backtest.py', 'error': '回测并发已满，请稍后重试'}
+        try:
+            cp = subprocess.run([ai_python_cmd(), '-c', script], cwd=str(ROOT/'app'), text=True, capture_output=True, timeout=900)
+        finally:
+            _BACKTEST_SEM.release()
         raw = (cp.stdout or '').strip()
         err = (cp.stderr or '').strip()
         if cp.returncode != 0:
@@ -611,7 +662,11 @@ def cleanup_duplicate_reports_by_code():
 
 
 def reports_payload():
-    deleted_duplicates = cleanup_duplicate_reports_by_code()
+    # 60 秒 TTL 缓存：GET 请求不再每次全盘扫描 + 执行删除副作用
+    now = time.time()
+    with _REPORTS_CACHE_LOCK:
+        if _REPORTS_CACHE['data'] is not None and (now - _REPORTS_CACHE['ts']) < _REPORTS_CACHE_TTL:
+            return _REPORTS_CACHE['data']
     latest_by_code = {}
     latest_without_code = {}
     for root in report_roots():
@@ -646,7 +701,11 @@ def reports_payload():
     items = sorted(items, key=lambda x: x.get('mtime_ts', 0), reverse=True)
     for item in items:
         item.pop('mtime_ts', None)
-    return {'count': len(items), 'items': items, 'deleted_duplicates': len(deleted_duplicates), 'deleted_duplicate_items': deleted_duplicates}
+    result = {'count': len(items), 'items': items, 'deleted_duplicates': 0, 'deleted_duplicate_items': []}
+    with _REPORTS_CACHE_LOCK:
+        _REPORTS_CACHE['ts'] = time.time()
+        _REPORTS_CACHE['data'] = result
+    return result
 
 def delete_report_payload(body):
     p=safe_report_path(body.get('id',''))
@@ -672,8 +731,49 @@ def read_body(env):
     try: return json.loads(env['wsgi.input'].read(int(env.get('CONTENT_LENGTH') or 0)).decode('utf-8') or '{}')
     except Exception: return {}
 
+# ---- Basic Auth 辅助 ----
+import base64 as _b64
+import hmac as _hmac
+from auth import AuthMiddleware
+SECRET_KEY = os.environ.get('SECRET_KEY', '')
+if not SECRET_KEY:
+    raise SystemExit('SECRET_KEY 未设置')
+
+
+def _check_basic_auth(env):
+    """校验 Authorization: Basic <user:pass>，恒定时间比较。"""
+    header = env.get('HTTP_AUTHORIZATION', '')
+    if not header.startswith('Basic '):
+        return False
+    try:
+        decoded = _b64.b64decode(header[6:]).decode('utf-8')
+    except Exception:
+        return False
+    if ':' not in decoded:
+        return False
+    user, _, pw = decoded.partition(':')
+    return _hmac.compare_digest(user, AUTH_USER) and _hmac.compare_digest(pw, AUTH_PASS)
+
+
+def _requires_auth(path):
+    return any(path == p or path.startswith(p + '/') for p in AUTH_PREFIXES)
+
+
+def _unauthorized(start):
+    body = json.dumps({'error': '未认证：需要 Basic Auth'}, ensure_ascii=False).encode('utf-8')
+    start('401 Unauthorized', [
+        ('Content-Type', 'application/json; charset=utf-8'),
+        ('Content-Length', str(len(body))),
+        ('WWW-Authenticate', 'Basic realm="%s"' % AUTH_REALM),
+    ])
+    return [body]
+
+
 def application(env,start):
     path=urlparse(env.get('PATH_INFO','/')).path; q=parse_qs(env.get('QUERY_STRING',''))
+    # ---- Basic Auth 门禁：受保护路径未认证返回 401 ----
+    if _requires_auth(path) and not _check_basic_auth(env):
+        return _unauthorized(start)
     if path=='/': return resp(start,'200 OK',INDEX_HTML,'text/html')
     if path=='/static/app.js': return resp(start,'200 OK',APP_JS,'application/javascript')
     if path=='/static/style.css': return resp(start,'200 OK',STYLE_CSS,'text/css')
@@ -692,11 +792,26 @@ def application(env,start):
     if path in routes: return resp(start,'200 OK',json.dumps(routes[path](),ensure_ascii=False),'application/json')
     return resp(start,'404 Not Found','Not Found','text/plain')
 
+
+# ---- 旧 Basic Auth 由 AuthMiddleware 接管（强制放行）----
+def _requires_auth(*a, **k): return False
+def _check_basic_auth(*a, **k): return True
+def _unauthorized(*a, **k): return None
+
+application = AuthMiddleware(application, SECRET_KEY)
+
 if __name__=='__main__':
     print(f'Web Stock Picker listening on 0.0.0.0:{PORT}')
     start_ai_scheduler_once()
-    from socketserver import ThreadingMixIn
-    from wsgiref.simple_server import WSGIServer
-    class ThreadedWSGIServer(ThreadingMixIn, WSGIServer):
-        daemon_threads = True
-    make_server('0.0.0.0', PORT, application, server_class=ThreadedWSGIServer).serve_forever()
+    start_report_cleanup_once()
+    # 优先使用生产级 WSGI 服务器 waitress（线程池 + keep-alive + HTTP/1.1），
+    # 未安装时回退到 wsgiref + ThreadingMixIn。
+    try:
+        from waitress import serve
+        serve(application, host='0.0.0.0', port=PORT, threads=32, channel_timeout=120)
+    except ImportError:
+        from socketserver import ThreadingMixIn
+        from wsgiref.simple_server import WSGIServer
+        class ThreadedWSGIServer(ThreadingMixIn, WSGIServer):
+            daemon_threads = True
+        make_server('0.0.0.0', PORT, application, server_class=ThreadedWSGIServer).serve_forever()

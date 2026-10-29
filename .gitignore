@@ -23,3 +23,11 @@ web_stock_picker/runtime/ai_schedule.json
 !app/backtest_results/.gitkeep
 runtime/jobs/
 *.log
+
+# ===== 敏感信息与本地数据 =====
+.env
+*.env
+auth-data/
+*.bak
+*.bak_*
+*.bak.*
