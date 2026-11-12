@@ -1,5 +1,9 @@
-# model_evaluator.py
 import numpy as np
+
+from app.model.model_validation_guard import (
+    score_simulation_reasonableness,
+    safe_numeric_array,
+)
 
 
 class ModelEvaluator:
@@ -78,10 +82,9 @@ class ModelEvaluator:
                         break
                 else:
                     return None
-            array = np.asarray(sims, dtype=float).reshape(-1)
-            if array.size < 2:
+            array = safe_numeric_array(sims)
+            if array is None or array.size < 2:
                 return None
-            # Invalid/nonpositive prices cannot be meaningfully evaluated as stock prices.
             if not np.isfinite(array).all() or np.any(array <= 0):
                 return None
             return array
@@ -104,40 +107,23 @@ class ModelEvaluator:
                 try:
                     validation_score = float(validation_score)
                     if np.isfinite(validation_score):
-                        # Map R² to [0, 1]; negative R² is worse than the mean baseline.
                         return float(np.clip((validation_score + 1.0) / 2.0, 0.0, 1.0))
                 except (TypeError, ValueError):
                     pass
 
+        historical = self.processed_data.get('processed')
+        if historical is not None and 'close' in historical and len(historical) > 2:
+            close = np.asarray(historical['close'], dtype=float)
+            if close.size > 1:
+                return score_simulation_reasonableness(sims_array, close)
+
         returns = np.diff(sims_array) / sims_array[:-1]
         if returns.size == 0 or not np.isfinite(returns).all():
             return 0.0
-
-        # Reject implausible explosive paths. Keep bounds broad so legitimate volatile
-        # instruments are not rejected solely by a fixed daily-return threshold.
         if np.max(np.abs(returns)) > 0.5:
             return 0.0
+        return 0.5
 
-        historical = self.processed_data.get('processed')
-        hist_returns = None
-        if historical is not None and 'close' in historical and len(historical) > 2:
-            close = np.asarray(historical['close'], dtype=float)
-            hist_returns = np.diff(close) / close[:-1]
-            hist_returns = hist_returns[np.isfinite(hist_returns)]
-
-        if hist_returns is not None and hist_returns.size:
-            # Score forecast volatility against observed training volatility; this is a
-            # plausibility fallback, not an out-of-sample accuracy estimate.
-            observed_vol = float(np.std(hist_returns))
-            forecast_vol = float(np.std(returns))
-            scale = max(observed_vol, 1e-6)
-            volatility_score = float(np.exp(-abs(forecast_vol - observed_vol) / scale))
-        else:
-            volatility_score = 0.5
-
-        return volatility_score
-
-    # Keep these helpers for callers that may use the previous internal API.
     def _select_by_standard_method(self, evaluation_result):
         scores = evaluation_result.get('scores', {})
         valid = {name: score for name, score in scores.items() if score > 0}
