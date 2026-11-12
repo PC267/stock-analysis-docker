@@ -1,9 +1,12 @@
 import numpy as np
 
-from app.model.model_validation_guard import (
-    score_simulation_reasonableness,
-    safe_numeric_array,
-)
+try:
+    from .model_validation_guard import score_simulation_reasonableness, safe_numeric_array
+except ImportError:
+    try:
+        from model_validation_guard import score_simulation_reasonableness, safe_numeric_array
+    except ImportError:
+        from app.model.model_validation_guard import score_simulation_reasonableness, safe_numeric_array
 
 
 class ModelEvaluator:
@@ -113,8 +116,8 @@ class ModelEvaluator:
 
         historical = self.processed_data.get('processed')
         if historical is not None and 'close' in historical and len(historical) > 2:
-            close = np.asarray(historical['close'], dtype=float)
-            if close.size > 1:
+            close = safe_numeric_array(historical['close'])
+            if close is not None and close.size > 1:
                 return score_simulation_reasonableness(sims_array, close)
 
         returns = np.diff(sims_array) / sims_array[:-1]
