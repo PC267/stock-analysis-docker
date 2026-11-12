@@ -37,7 +37,7 @@ class ModelEvaluator:
 
     @property
     def select_best_model(self):
-        """Prefer the best finite time-ordered holdout score; sanity is not accuracy."""
+        """Prefer positive chronological holdout R²; sanity is not accuracy."""
         if self._best_model_cache is not None:
             return self._best_model_cache
 
@@ -50,19 +50,23 @@ class ModelEvaluator:
             print(f"✅ 依据时序留出集评分选择模型: {best_name}")
             return result
 
-        # No model has genuine validation evidence. Select a usable path deterministically,
+        # No model has positive holdout skill. Select a usable path deterministically,
         # but do not claim that the fallback order represents forecast accuracy.
         for name in self.FALLBACK_PRIORITY:
             array = evaluated['arrays'].get(name)
             if array is not None:
                 self._best_model_cache = (name, array)
-                print(f"⚠️ 缺少有效时序验证分数，按可用性回退选择模型: {name}")
+                print(f"⚠️ 缺少正向时序验证证据，按可用性回退选择模型: {name}")
                 return self._best_model_cache
 
         return self._get_fallback_model()
 
     def _get_validation_score(self, model_name):
-        """Return a raw finite holdout score, or None when no evidence is available."""
+        """Return finite positive chronological holdout R², else None.
+
+        A non-positive R² indicates no improvement over a constant-mean baseline,
+        so such a model is not used as evidence for selecting a predictive model.
+        """
         model_info = self.models.get(model_name)
         if not isinstance(model_info, dict):
             return None
@@ -75,7 +79,7 @@ class ModelEvaluator:
                 score = float(value)
             except (TypeError, ValueError):
                 continue
-            if np.isfinite(score):
+            if np.isfinite(score) and score > 0.0:
                 return score
         return None
 
@@ -128,11 +132,7 @@ class ModelEvaluator:
             return None
 
     def _calculate_score(self, model_name, sims_array):
-        """Compatibility method returning only genuine validation evidence.
-
-        Simulation-path reasonableness is deliberately excluded from model ranking:
-        without observed future values it cannot measure predictive accuracy.
-        """
+        """Return only genuine validation evidence, never simulation sanity as accuracy."""
         if sims_array is None or sims_array.size < 2:
             return 0.0
         score = self._get_validation_score(model_name)
@@ -140,7 +140,7 @@ class ModelEvaluator:
 
     def _select_by_standard_method(self, evaluation_result):
         scores = evaluation_result.get('validation_scores', evaluation_result.get('scores', {}))
-        valid = {name: score for name, score in scores.items() if np.isfinite(score)}
+        valid = {name: score for name, score in scores.items() if np.isfinite(score) and score > 0.0}
         if not valid:
             return None
         name = max(valid, key=valid.get)
