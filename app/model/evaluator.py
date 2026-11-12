@@ -3,13 +3,14 @@ import numpy as np
 
 
 class ModelEvaluator:
+    """选择可用预测模型，优先使用训练期间的时序验证分数。"""
+
     def __init__(self, config, models, simulations, processed_data):
         self.config = config
-        self.models = models
-        self.simulations = simulations
-        self.processed_data = processed_data
+        self.models = models or {}
+        self.simulations = simulations or {}
+        self.processed_data = processed_data or {}
 
-        # 兼容模拟天数配置（支持 simulation_days 或 days_to_simulate）
         if hasattr(config, 'simulation_days'):
             self.simulation_days = config.simulation_days
         elif hasattr(config, 'days_to_simulate'):
@@ -19,237 +20,136 @@ class ModelEvaluator:
         else:
             self.simulation_days = 30
 
-        self._best_model_cache = None  # 缓存最优模型结果
+        self._best_model_cache = None
 
     @property
     def select_best_model(self):
-        """选择最优模型"""
-        # 如果已经缓存了结果，直接返回
+        """选择最优模型；验证集分数优先，模拟路径合理性仅作后备。"""
         if self._best_model_cache is not None:
             return self._best_model_cache
 
-        print("开始模型评估...")
+        evaluated = self._evaluate_all_models()
+        valid = {name: score for name, score in evaluated['scores'].items() if score > 0}
+        if valid:
+            best_name = max(valid, key=valid.get)
+            result = (best_name, evaluated['arrays'][best_name])
+            self._best_model_cache = result
+            print(f"✅ 通过时序验证/合理性评分选择模型: {best_name}")
+            return result
 
-        # 记录评估结果
-        evaluation_result = self._evaluate_all_models()
+        for name in ('ensemble', 'xgboost', 'lightgbm', 'catboost', 'lstm', 'sarima', 'garch', 'multi_factor', 'arima'):
+            if name in self.simulations:
+                array = self._safe_process_data(self.simulations[name])
+                if array is not None and array.size:
+                    self._best_model_cache = (name, array)
+                    return self._best_model_cache
 
-        # 尝试标准方法选择最优模型
-        best_model_info = self._select_by_standard_method(evaluation_result)
-
-        if best_model_info is not None:
-            model_name, sims_array = best_model_info
-            print(f"✅ 通过标准方法选择最优模型: {model_name}")
-            self._best_model_cache = (model_name, sims_array)
-            return self._best_model_cache
-
-        # 如果标准方法失败，使用备选方法
-        print("\n⚠️ 标准方法失败，使用备选方案...")
-        backup_model_info = self._select_by_backup_method(evaluation_result)
-
-        if backup_model_info is not None:
-            model_name, sims_array = backup_model_info
-            print(f"✅ 通过备选方案选择模型: {model_name}")
-            self._best_model_cache = (model_name, sims_array)
-            return self._best_model_cache
-
-        # 如果所有方法都失败，使用硬编码备选
-        print("⚠️ 所有方法都失败，使用硬编码备选方案")
-        model_name = 'lstm' if 'lstm' in self.simulations else 'arima'
-        return self._get_fallback_model(model_name)
+        return self._get_fallback_model()
 
     def _evaluate_all_models(self):
-        """评估所有模型"""
-        evaluation_result = {
-            'scores': {},
-            'arrays': {},
-            'valid_models': [],
-            'all_models': list(self.simulations.keys())
-        }
-
-        print("正在评估以下模型:", ', '.join(evaluation_result['all_models']))
-
-        for model_name, sims in self.simulations.items():
-            # 处理数据
-            sims_array = self._safe_process_data(sims)
-            evaluation_result['arrays'][model_name] = sims_array
-
-            if sims_array is None:
-                print(f"  {model_name:20s} ❌ 数据无效")
-                evaluation_result['scores'][model_name] = 0
-                continue
-
-            # 计算得分
-            score = self._calculate_score(model_name, sims_array)
-            evaluation_result['scores'][model_name] = score
-
+        result = {'scores': {}, 'arrays': {}, 'valid_models': [], 'all_models': list(self.simulations)}
+        for name, simulation in self.simulations.items():
+            array = self._safe_process_data(simulation)
+            result['arrays'][name] = array
+            score = self._calculate_score(name, array) if array is not None else 0.0
+            result['scores'][name] = score
             if score > 0:
-                evaluation_result['valid_models'].append(model_name)
-                print(f"  {model_name:20s} ✅ 得分: {score:.2f}")
-            else:
-                print(f"  {model_name:20s} ❌ 得分: 0")
+                result['valid_models'].append(name)
+        return result
 
-        print(f"\n评估完成，有效模型: {len(evaluation_result['valid_models'])}/{len(evaluation_result['all_models'])}")
-        return evaluation_result
-
-    def _select_by_standard_method(self, evaluation_result):
-        """使用标准方法选择最优模型"""
-        valid_scores = {k: v for k, v in evaluation_result['scores'].items() if v > 0}
-
-        if not valid_scores:
-            print("❌ 标准方法: 没有有效得分的模型")
-            return None
-
-        # 找到得分最高的模型
-        best_model = max(valid_scores, key=valid_scores.get)
-        best_score = valid_scores[best_model]
-
-        # 获取对应的模拟数据
-        best_array = evaluation_result['arrays'][best_model]
-
-        if best_array is None or len(best_array) < 2:
-            print(f"❌ 标准方法: 最优模型 {best_model} 数据无效")
-            return None
-
-        print(f"\n🏆 标准方法找到最优模型: {best_model} (得分: {best_score:.2f})")
-        return best_model, best_array
-
-    def _select_by_backup_method(self, evaluation_result):
-        """使用备选方法选择模型（包含所有新增模型）"""
-        print("\n正在使用备选方案...")
-
-        available_models = list(self.simulations.keys())
-
-        # 策略1: 选择数组长度合适的模型
-        for model_name in available_models:
-            array = evaluation_result['arrays'][model_name]
-            if array is not None and len(array) >= self.simulation_days:
-                print(f"备选策略1: 选择数据完整的模型 {model_name}")
-                return model_name, array
-
-        # 策略2: 选择任意有数据的模型
-        for model_name in available_models:
-            array = evaluation_result['arrays'][model_name]
-            if array is not None and len(array) > 0:
-                print(f"备选策略2: 选择有数据的模型 {model_name}")
-                return model_name, array
-
-        # 策略3: 按优先级选择（包含全部模型，新模型优先级较高）
-        model_priority = [
-            'ensemble', 'xgboost', 'lightgbm', 'catboost', 'lstm',
-            'sarima', 'garch', 'multi_factor', 'arima'
-        ]
-        for model_name in model_priority:
-            if model_name in available_models:
-                print(f"备选策略3: 按优先级选择 {model_name}")
-                sims = self.simulations[model_name]
-                array = self._safe_process_data(sims)
-                if array is not None:
-                    return model_name, array
-
-        return None
-
-    def _get_fallback_model(self, preferred_model='xgboost'):
-        """获取备选模型（硬编码）"""
-        print(f"使用硬编码备选方案，选择模型: {preferred_model}")
-
-        try:
-            last_price = self.processed_data['processed']['close'].iloc[-1]
-            default_sim = np.full(self.simulation_days, last_price)
-
-            if preferred_model in self.simulations:
-                # 尝试使用该模型的原始数据
-                sims = self.simulations[preferred_model]
-                array = self._safe_process_data(sims)
-                if array is not None:
-                    return preferred_model, array
-
-            # 如果指定模型不可用，尝试从所有模型中任选一个
-            for model_name in self.simulations.keys():
-                array = self._safe_process_data(self.simulations[model_name])
-                if array is not None:
-                    return model_name, array
-
-            return preferred_model, default_sim
-        except:
-            default_sim = np.full(self.simulation_days, 100.0)  # 默认值
-            return 'arima', default_sim
+    def _get_fallback_model(self, preferred_model='ensemble'):
+        processed = self.processed_data.get('processed')
+        if processed is not None and not processed.empty and 'close' in processed:
+            last_price = float(processed['close'].iloc[-1])
+        else:
+            last_price = 1.0
+        for name, simulation in self.simulations.items():
+            array = self._safe_process_data(simulation)
+            if array is not None and array.size:
+                return name, array
+        return preferred_model, np.full(max(1, int(self.simulation_days)), last_price, dtype=float)
 
     def _safe_process_data(self, sims):
-        """安全地处理数据"""
         try:
-            if isinstance(sims, np.ndarray):
-                return sims.astype(float)
-            elif isinstance(sims, dict):
-                # 查找数值数据
-                for key in ['predictions', 'values', 'simulation', 'close', 'price']:
+            if isinstance(sims, dict):
+                for key in ('predictions', 'values', 'simulation', 'close', 'price'):
                     if key in sims:
-                        data = sims[key]
-                        if isinstance(data, (list, np.ndarray)):
-                            return np.array(data, dtype=float)
-                # 尝试转换所有值
-                return np.array(list(sims.values()), dtype=float)
-            elif isinstance(sims, list):
-                return np.array(sims, dtype=float)
-            elif hasattr(sims, '__array__'):
-                return np.array(sims, dtype=float)
-            else:
+                        sims = sims[key]
+                        break
+                else:
+                    return None
+            array = np.asarray(sims, dtype=float).reshape(-1)
+            if array.size < 2:
                 return None
-        except Exception as e:
-            print(f"数据处理失败: {e}")
+            # Invalid/nonpositive prices cannot be meaningfully evaluated as stock prices.
+            if not np.isfinite(array).all() or np.any(array <= 0):
+                return None
+            return array
+        except (TypeError, ValueError):
             return None
 
     def _calculate_score(self, model_name, sims_array):
-        """计算模型得分"""
-        try:
-            # 过滤无效值
-            valid_mask = np.isfinite(sims_array)
-            valid_sims = sims_array[valid_mask]
+        """Use chronological holdout score when present; otherwise score forecast sanity.
 
-            if len(valid_sims) < 2:
-                return 0
+        The fallback deliberately does not claim predictive accuracy because no future
+        observations are available to this evaluator.
+        """
+        if sims_array is None or sims_array.size < 2:
+            return 0.0
 
-            # 计算稳定性得分
-            returns = np.diff(valid_sims) / valid_sims[:-1]
-            valid_returns = returns[np.isfinite(returns)]
+        model_info = self.models.get(model_name)
+        if isinstance(model_info, dict):
+            validation_score = model_info.get('val_score', model_info.get('test_score'))
+            if validation_score is not None:
+                try:
+                    validation_score = float(validation_score)
+                    if np.isfinite(validation_score):
+                        # Map R² to [0, 1]; negative R² is worse than the mean baseline.
+                        return float(np.clip((validation_score + 1.0) / 2.0, 0.0, 1.0))
+                except (TypeError, ValueError):
+                    pass
 
-            if len(valid_returns) == 0:
-                stability = 0.5
-            else:
-                std_dev = np.std(valid_returns)
-                stability = 1.0 / (std_dev + 1e-10) if std_dev > 0 else 10.0
+        returns = np.diff(sims_array) / sims_array[:-1]
+        if returns.size == 0 or not np.isfinite(returns).all():
+            return 0.0
 
-            # 计算合理性得分
-            if len(valid_returns) > 0:
-                max_change = np.max(np.abs(valid_returns))
-                reasonableness = 1.0 / (max_change + 0.05)
-            else:
-                reasonableness = 0.5
+        # Reject implausible explosive paths. Keep bounds broad so legitimate volatile
+        # instruments are not rejected solely by a fixed daily-return threshold.
+        if np.max(np.abs(returns)) > 0.5:
+            return 0.0
 
-            # 计算趋势得分
-            try:
-                if 'close' in self.processed_data['processed'].columns:
-                    hist_data = self.processed_data['processed']['close']
-                    if len(hist_data) >= 20:
-                        hist_trend = 1 if hist_data.iloc[-1] > hist_data.iloc[-20] else -1
-                    else:
-                        hist_trend = 1 if hist_data.iloc[-1] > hist_data.iloc[0] else -1
-                else:
-                    hist_trend = 1
-            except:
-                hist_trend = 1
+        historical = self.processed_data.get('processed')
+        hist_returns = None
+        if historical is not None and 'close' in historical and len(historical) > 2:
+            close = np.asarray(historical['close'], dtype=float)
+            hist_returns = np.diff(close) / close[:-1]
+            hist_returns = hist_returns[np.isfinite(hist_returns)]
 
-            sim_trend = 1 if valid_sims[-1] > valid_sims[0] else -1
-            trend_score = 1.0 if hist_trend == sim_trend else 0.5
+        if hist_returns is not None and hist_returns.size:
+            # Score forecast volatility against observed training volatility; this is a
+            # plausibility fallback, not an out-of-sample accuracy estimate.
+            observed_vol = float(np.std(hist_returns))
+            forecast_vol = float(np.std(returns))
+            scale = max(observed_vol, 1e-6)
+            volatility_score = float(np.exp(-abs(forecast_vol - observed_vol) / scale))
+        else:
+            volatility_score = 0.5
 
-            # 综合得分
-            combined_score = (
-                    min(stability, 10) * 0.4 +
-                    reasonableness * 0.3 +
-                    trend_score * 0.3
-            )
+        return volatility_score
 
-            return combined_score
+    # Keep these helpers for callers that may use the previous internal API.
+    def _select_by_standard_method(self, evaluation_result):
+        scores = evaluation_result.get('scores', {})
+        valid = {name: score for name, score in scores.items() if score > 0}
+        if not valid:
+            return None
+        name = max(valid, key=valid.get)
+        array = evaluation_result.get('arrays', {}).get(name)
+        return (name, array) if array is not None and len(array) >= 2 else None
 
-        except Exception as e:
-            print(f"评分失败 ({model_name}): {e}")
-            return 0
+    def _select_by_backup_method(self, evaluation_result):
+        for name in evaluation_result.get('all_models', []):
+            array = evaluation_result.get('arrays', {}).get(name)
+            if array is not None and len(array) > 0:
+                return name, array
+        return None
