@@ -1,16 +1,22 @@
 import numpy as np
 
 try:
-    from .model_validation_guard import score_simulation_reasonableness, safe_numeric_array
+    from .model_validation_guard import safe_numeric_array
 except ImportError:
     try:
-        from model_validation_guard import score_simulation_reasonableness, safe_numeric_array
+        from model_validation_guard import safe_numeric_array
     except ImportError:
-        from app.model.model_validation_guard import score_simulation_reasonableness, safe_numeric_array
+        from app.model.model_validation_guard import safe_numeric_array
 
 
 class ModelEvaluator:
-    """选择可用预测模型，优先使用训练期间的时序验证分数。"""
+    """Select models using genuine chronological holdout metrics only."""
+
+    VALIDATION_SCORE_KEYS = ('val_score', 'validation_score', 'test_score')
+    FALLBACK_PRIORITY = (
+        'ensemble', 'xgboost', 'lightgbm', 'catboost', 'lstm',
+        'sarima', 'garch', 'multi_factor', 'quant_factor', 'arima'
+    )
 
     def __init__(self, config, models, simulations, processed_data):
         self.config = config
@@ -31,37 +37,70 @@ class ModelEvaluator:
 
     @property
     def select_best_model(self):
-        """选择最优模型；验证集分数优先，模拟路径合理性仅作后备。"""
+        """Prefer positive chronological holdout R²; sanity is not accuracy."""
         if self._best_model_cache is not None:
             return self._best_model_cache
 
         evaluated = self._evaluate_all_models()
-        valid = {name: score for name, score in evaluated['scores'].items() if score > 0}
-        if valid:
-            best_name = max(valid, key=valid.get)
+        scored_models = evaluated['validation_scores']
+        if scored_models:
+            best_name = max(scored_models, key=scored_models.get)
             result = (best_name, evaluated['arrays'][best_name])
             self._best_model_cache = result
-            print(f"✅ 通过时序验证/合理性评分选择模型: {best_name}")
+            print(f"✅ 依据时序留出集评分选择模型: {best_name}")
             return result
 
-        for name in ('ensemble', 'xgboost', 'lightgbm', 'catboost', 'lstm', 'sarima', 'garch', 'multi_factor', 'arima'):
-            if name in self.simulations:
-                array = self._safe_process_data(self.simulations[name])
-                if array is not None and array.size:
-                    self._best_model_cache = (name, array)
-                    return self._best_model_cache
+        # No model has positive holdout skill. Select a usable path deterministically,
+        # but do not claim that the fallback order represents forecast accuracy.
+        for name in self.FALLBACK_PRIORITY:
+            array = evaluated['arrays'].get(name)
+            if array is not None:
+                self._best_model_cache = (name, array)
+                print(f"⚠️ 缺少正向时序验证证据，按可用性回退选择模型: {name}")
+                return self._best_model_cache
 
         return self._get_fallback_model()
 
+    def _get_validation_score(self, model_name):
+        """Return finite positive chronological holdout R², else None.
+
+        A non-positive R² indicates no improvement over a constant-mean baseline,
+        so such a model is not used as evidence for selecting a predictive model.
+        """
+        model_info = self.models.get(model_name)
+        if not isinstance(model_info, dict):
+            return None
+
+        for key in self.VALIDATION_SCORE_KEYS:
+            value = model_info.get(key)
+            if value is None:
+                continue
+            try:
+                score = float(value)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(score) and score > 0.0:
+                return score
+        return None
+
     def _evaluate_all_models(self):
-        result = {'scores': {}, 'arrays': {}, 'valid_models': [], 'all_models': list(self.simulations)}
+        result = {
+            'scores': {},
+            'validation_scores': {},
+            'arrays': {},
+            'valid_models': [],
+            'all_models': list(self.simulations)
+        }
         for name, simulation in self.simulations.items():
             array = self._safe_process_data(simulation)
             result['arrays'][name] = array
-            score = self._calculate_score(name, array) if array is not None else 0.0
-            result['scores'][name] = score
-            if score > 0:
+            validation_score = self._get_validation_score(name) if array is not None else None
+            if validation_score is not None:
+                result['scores'][name] = validation_score
+                result['validation_scores'][name] = validation_score
                 result['valid_models'].append(name)
+            else:
+                result['scores'][name] = 0.0
         return result
 
     def _get_fallback_model(self, preferred_model='ensemble'):
@@ -70,11 +109,11 @@ class ModelEvaluator:
             last_price = float(processed['close'].iloc[-1])
         else:
             last_price = 1.0
-        for name, simulation in self.simulations.items():
-            array = self._safe_process_data(simulation)
-            if array is not None and array.size:
+        for name in self.FALLBACK_PRIORITY:
+            array = self._safe_process_data(self.simulations.get(name))
+            if array is not None:
                 return name, array
-        return preferred_model, np.full(max(1, int(self.simulation_days)), last_price, dtype=float)
+        return preferred_model, np.full(max(1, int(self.simulation_days)), last_price, dtype=np.float32)
 
     def _safe_process_data(self, sims):
         try:
@@ -86,50 +125,22 @@ class ModelEvaluator:
                 else:
                     return None
             array = safe_numeric_array(sims)
-            if array is None or array.size < 2:
-                return None
-            if not np.isfinite(array).all() or np.any(array <= 0):
+            if array is None or array.size < 2 or np.any(array <= 0):
                 return None
             return array
         except (TypeError, ValueError):
             return None
 
     def _calculate_score(self, model_name, sims_array):
-        """Use chronological holdout score when present; otherwise score forecast sanity.
-
-        The fallback deliberately does not claim predictive accuracy because no future
-        observations are available to this evaluator.
-        """
+        """Return only genuine validation evidence, never simulation sanity as accuracy."""
         if sims_array is None or sims_array.size < 2:
             return 0.0
-
-        model_info = self.models.get(model_name)
-        if isinstance(model_info, dict):
-            validation_score = model_info.get('val_score', model_info.get('test_score'))
-            if validation_score is not None:
-                try:
-                    validation_score = float(validation_score)
-                    if np.isfinite(validation_score):
-                        return float(np.clip((validation_score + 1.0) / 2.0, 0.0, 1.0))
-                except (TypeError, ValueError):
-                    pass
-
-        historical = self.processed_data.get('processed')
-        if historical is not None and 'close' in historical and len(historical) > 2:
-            close = safe_numeric_array(historical['close'])
-            if close is not None and close.size > 1:
-                return score_simulation_reasonableness(sims_array, close)
-
-        returns = np.diff(sims_array) / sims_array[:-1]
-        if returns.size == 0 or not np.isfinite(returns).all():
-            return 0.0
-        if np.max(np.abs(returns)) > 0.5:
-            return 0.0
-        return 0.5
+        score = self._get_validation_score(model_name)
+        return score if score is not None else 0.0
 
     def _select_by_standard_method(self, evaluation_result):
-        scores = evaluation_result.get('scores', {})
-        valid = {name: score for name, score in scores.items() if score > 0}
+        scores = evaluation_result.get('validation_scores', evaluation_result.get('scores', {}))
+        valid = {name: score for name, score in scores.items() if np.isfinite(score) and score > 0.0}
         if not valid:
             return None
         name = max(valid, key=valid.get)
@@ -137,8 +148,9 @@ class ModelEvaluator:
         return (name, array) if array is not None and len(array) >= 2 else None
 
     def _select_by_backup_method(self, evaluation_result):
-        for name in evaluation_result.get('all_models', []):
-            array = evaluation_result.get('arrays', {}).get(name)
-            if array is not None and len(array) > 0:
+        arrays = evaluation_result.get('arrays', {})
+        for name in self.FALLBACK_PRIORITY:
+            array = arrays.get(name)
+            if array is not None and len(array) >= 2:
                 return name, array
         return None

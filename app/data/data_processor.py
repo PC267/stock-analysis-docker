@@ -1,4 +1,3 @@
-# data_processor.py
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
@@ -20,7 +19,7 @@ class DataProcessor:
         ]
         for col in numeric_cols:
             if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+                df[col] = pd.to_numeric(df[col], errors='coerce').astype(np.float32)
         return df
 
     def process_data(self, stock_data):
@@ -92,23 +91,30 @@ class DataProcessor:
 
             df = df.copy()
 
-            # 收益率：只对当前数据及过去数据计算，避免未来 leak
-            df['returns'] = df['close'].pct_change().replace([np.inf, -np.inf], np.nan)
+            df['returns'] = (
+                df['close']
+                .pct_change()
+                .replace([np.inf, -np.inf], np.nan)
+                .astype(np.float32)
+            )
 
-            # 移动平均线
-            df['MA5'] = df['close'].rolling(window=5, min_periods=1).mean()
-            df['MA10'] = df['close'].rolling(window=10, min_periods=1).mean()
-            df['MA20'] = df['close'].rolling(window=20, min_periods=1).mean()
+            df['MA5'] = df['close'].rolling(window=5, min_periods=1).mean().astype(np.float32)
+            df['MA10'] = df['close'].rolling(window=10, min_periods=1).mean().astype(np.float32)
+            df['MA20'] = df['close'].rolling(window=20, min_periods=1).mean().astype(np.float32)
 
-            # 相对强弱指标 (RSI) - 简化版
-            delta = df['close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
+            delta = df['close'].diff().astype(np.float32)
+            gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean().astype(np.float32)
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean().astype(np.float32)
             rs = gain / loss.replace(0, np.nan)
-            df['RSI'] = (100 - (100 / (1 + rs))).fillna(50)
+            df['RSI'] = (100 - (100 / (1 + rs))).fillna(50).astype(np.float32)
 
-            # 波动率
-            df['volatility'] = df['returns'].rolling(window=20, min_periods=1).std().fillna(0) * np.sqrt(252)
+            df['volatility'] = (
+                df['returns']
+                .rolling(window=20, min_periods=1)
+                .std()
+                .fillna(0)
+                .astype(np.float32) * np.sqrt(252)
+            )
 
             return df
 
@@ -127,7 +133,13 @@ class DataProcessor:
                 df = df.sort_values('date').drop_duplicates(subset=['date'], keep='last')
 
             original_len = len(df)
-            df = df.dropna()
+            required_cols = ['open', 'high', 'low', 'close', 'volume', 'returns', 'MA5', 'MA10', 'MA20', 'RSI', 'volatility']
+            existing_cols = [c for c in required_cols if c in df.columns]
+            if not existing_cols:
+                print("  ⚠️ 没有可用于训练的有效列")
+                return None
+
+            df = df.loc[:, list(dict.fromkeys(existing_cols))].dropna().copy()
             cleaned_len = len(df)
 
             if cleaned_len == 0:
@@ -139,7 +151,7 @@ class DataProcessor:
                 return None
 
             print(f"  数据清洗: {original_len} -> {cleaned_len} 条记录")
-            return df
+            return df.astype({c: np.float32 for c in existing_cols if c != 'date'})
 
         except Exception as e:
             print(f"  数据清洗失败: {e}")
@@ -148,11 +160,11 @@ class DataProcessor:
     @staticmethod
     def _safe_fit_scaler(values):
         """缩放器安全拟合：避免全空/常量数组导致失败。"""
-        arr = np.asarray(values, dtype=float)
+        arr = np.asarray(values, dtype=np.float32)
         if arr.size == 0 or not np.isfinite(arr).any():
             return None
         if np.allclose(arr, arr[0], rtol=0, atol=1e-12):
-            return np.zeros_like(arr)
+            return np.zeros_like(arr, dtype=np.float32)
         return arr
 
     def prepare_for_training(self, df, fit_scaler=True):
@@ -169,62 +181,60 @@ class DataProcessor:
                 print("  ⚠️ 缺少 close/volume 字段，无法准备训练数据")
                 return {}
 
-            # 仅保留有效数值列
-            valid_cols = [c for c in ['close', 'volume', 'open', 'high', 'low', 'returns', 'MA5', 'MA10', 'MA20', 'RSI', 'volatility'] if c in df.columns]
-            df = df[valid_cols].dropna().copy()
+            valid_cols = [
+                c for c in ['close', 'volume', 'open', 'high', 'low', 'returns', 'MA5', 'MA10', 'MA20', 'RSI', 'volatility']
+                if c in df.columns
+            ]
+            df = df[valid_cols].dropna().copy().astype(np.float32)
 
             if len(df) == 0:
                 print("  ⚠️ 过滤无效数据后为空")
                 return {}
 
-            # 训练前先做时序和数值校验，确保不在未来时刻反向修正过去数据
-            if not np.isfinite(df['close'].to_numpy()).all():
+            if not np.isfinite(df['close'].to_numpy(dtype=np.float32, copy=False)).all():
                 print("  ⚠️ close 列存在非有限值")
                 return {}
 
-            # 准备收盘价数据
-            close_prices = df['close'].values.reshape(-1, 1)
+            close_prices = df['close'].to_numpy(dtype=np.float32).reshape(-1, 1)
             scaler_close = MinMaxScaler()
             if fit_scaler:
                 close_scaled = scaler_close.fit_transform(close_prices)
             else:
                 close_scaled = scaler_close.transform(close_prices)
 
-            # 准备成交量数据
-            volume = df['volume'].values.reshape(-1, 1)
+            volume = df['volume'].to_numpy(dtype=np.float32).reshape(-1, 1)
             scaler_volume = MinMaxScaler()
             if fit_scaler:
                 volume_scaled = scaler_volume.fit_transform(volume)
             else:
                 volume_scaled = scaler_volume.transform(volume)
 
-            # 准备多因子数据
             factor_data = {}
             factor_cols = ['MA5', 'MA10', 'MA20', 'RSI', 'volatility']
-            factor_df = df[[c for c in factor_cols if c in df.columns]].dropna()
+            factor_df = df[[c for c in factor_cols if c in df.columns]].dropna().astype(np.float32)
 
             if len(factor_df) > 0:
                 factor_scaler = MinMaxScaler()
-                factors_scaled = factor_scaler.fit_transform(factor_df.values)
+                factors_scaled = factor_scaler.fit_transform(factor_df.to_numpy(dtype=np.float32, copy=False))
                 factor_data = {
                     'df': factor_df,
-                    'scaled': factors_scaled,
+                    'scaled': factors_scaled.astype(np.float32),
                     'scaler': factor_scaler,
                     'columns': factor_df.columns.tolist()
                 }
             else:
                 print("  ⚠️ 因子数据为空")
 
-            returns_data = df['returns'].values if 'returns' in df.columns else None
+            returns_data = df['returns'].to_numpy(dtype=np.float32, copy=False) if 'returns' in df.columns else None
 
             return {
-                'close_scaled': close_scaled,
-                'volume_scaled': volume_scaled,
+                'close_scaled': close_scaled.astype(np.float32),
+                'volume_scaled': volume_scaled.astype(np.float32),
                 'scaler_close': scaler_close,
                 'scaler_volume': scaler_volume,
                 'factor_data': factor_data,
                 'returns': returns_data,
-                'close_prices': df['close'].values,
+                'close_prices': df['close'].to_numpy(dtype=np.float32, copy=False),
                 'index': df.index.to_numpy()
             }
 
