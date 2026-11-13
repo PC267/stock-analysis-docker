@@ -1065,18 +1065,22 @@ class ReportGenerator:
         """将风险信息保存到Excel汇总表"""
         try:
             # 从risk_analysis中提取模拟数据的最高价和最低价
-            if 'simulated_data' in risk_analysis and risk_analysis['simulated_data'] is not None:
+            if 'simulated_data' in risk_analysis and risk_analysis['simulated_data'] is not None and len(risk_analysis['simulated_data']) > 0:
                 sim_data = risk_analysis['simulated_data']
-                sim_high_price = sim_data['high'].max() if len(sim_data) > 0 else 0
-                sim_low_price = sim_data['low'].min() if len(sim_data) > 0 else 0
+                sim_high_price = sim_data['high'].max()
+                sim_low_price = sim_data['low'].min()
                 sim_price_diff = sim_high_price - sim_low_price
                 sim_days = len(sim_data)
+                
+                # 新增：计算总收益率（基于收盘价）
+                total_return = ((sim_data['close'].iloc[-1] / sim_data['close'].iloc[0]) - 1) * 100
             else:
                 # 如果没有模拟数据，使用默认值
                 sim_high_price = 0
                 sim_low_price = 0
                 sim_price_diff = 0
                 sim_days = 0
+                total_return = 0
 
             # ==================== 修改：获取得分前三模型名字 ====================
             # 从risk_analysis中提取最优模型信息
@@ -1098,7 +1102,8 @@ class ReportGenerator:
                 '模拟天数': sim_days,
                 '模拟最高价': f"{sim_high_price:.4f}",
                 '模拟最低价': f"{sim_low_price:.4f}",
-                '模拟价格差': f"{sim_price_diff:.4f}"
+                '模拟价格差': f"{sim_price_diff:.4f}",
+                '总收益率': f"{total_return:.2f}%"  # <-- 新增这一行
             }
             # ================================================================
 

@@ -174,7 +174,6 @@ _industry_cache = {}
 _industry_cache_ts = 0
 _INDUSTRY_CACHE_TTL = 3600  # 1小时
 
-
 def _fast_em_clist(params):
     """快速直连 EM API，不走 em_json 的 4 次重试 + 12s 超时"""
     url = 'https://push2delay.eastmoney.com/api/qt/clist/get?' + urllib.parse.urlencode(params)
@@ -185,7 +184,6 @@ def _fast_em_clist(params):
         return json.loads(urllib.request.urlopen(req, timeout=10).read().decode('utf-8', 'ignore'))
     except Exception:
         return None
-
 
 def _warm_industry_cache():
     """后台预热行业数据缓存，重试失败页面。"""
@@ -227,7 +225,6 @@ def _warm_industry_cache():
     _industry_cache.update(result)
     _industry_cache_ts = time.time()
 
-
 def fetch_stock_industries(codes=None):
     """批量获取A股行业数据（东方财富行业分类），缓存1小时。
     
@@ -243,14 +240,12 @@ def fetch_stock_industries(codes=None):
         return {c: _industry_cache.get(c, '') for c in codes}
     return dict(_industry_cache)
 
-
 # 同步预热（模块导入时执行，约4秒）
 # 如果网络不可用则静默失败，不影响启动
 try:
     _warm_industry_cache()
 except Exception:
     pass
-
 
 def load_gainian_module():
     path = ROOT / 'app' / 'model' / 'GaiNian stock.py'
@@ -263,9 +258,20 @@ def load_gainian_module():
 
 def resolve_industry_batch(period='5d', limit=3):
     source = 'eastmoney_push2delay'
+    
+    # 1. 尝试首选：东方财富
     industries = eastmoney_top_industries(period)
+    
+    # 2. 如果东财失败，降级到新浪备用数据源
     if not industries:
-        raise RuntimeError('东方财富板块资金流未返回行业数据，已禁用本地算法候选池')
+        print("⚠️ [fallback] 东方财富接口被风控或无数据，切换至新浪备用数据源...")
+        industries = alt_top_industries(period)
+        source = 'sina_market_center'
+    
+    # 3. 如果新浪也失败，直接使用本地算法池
+    if not industries:
+        print("⚠️ [fallback] 新浪备用源获取失败，降级使用本地算法候选池")
+        return local_industry_batch(period, limit)
 
     out_industries = []
     stocks = []
@@ -280,7 +286,14 @@ def resolve_industry_batch(period='5d', limit=3):
         if not ind['code'] or not ind['name']:
             continue
         out_industries.append(ind)
-        for st0 in eastmoney_industry_stocks(ind['code'], limit, period):
+        
+        # 4. 根据实际生效的数据源，调用对应的成分股提取函数
+        if source == 'sina_market_center':
+            st_list = alt_industry_stocks(ind['code'], limit, period)
+        else:
+            st_list = eastmoney_industry_stocks(ind['code'], limit, period)
+            
+        for st0 in st_list:
             code = normalize_code(st0.get('code', ''))
             if len(code) != 6:
                 continue
@@ -300,6 +313,9 @@ def resolve_industry_batch(period='5d', limit=3):
             seen.add(st['code'])
             uniq.append(st)
 
+    # 5. 最后兜底：如果成分股解析为空，直接回退本地池
     if not out_industries or not uniq:
-        raise RuntimeError('东方财富板块资金流未返回有效成分股，已禁用本地算法候选池')
+        print("⚠️ [fallback] 备用接口未返回有效成分股，降级使用本地算法候选池")
+        return local_industry_batch(period, limit)
+        
     return out_industries, uniq
