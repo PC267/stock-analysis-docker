@@ -5,6 +5,7 @@
 - 训练后 del 大中间对象 + gc.collect()
 - model_summary / diagnosis 只在 FACTORY_DEBUG=1 下保存
 - last_features/last_factors 使用 .copy() 避免 dangling view
+- 🌟 强制保留 'strategy_' 开头的策略特征，避免被方差过滤误杀
 """
 import os
 import gc
@@ -70,7 +71,7 @@ class ModelFactory:
             "catboost": {"iterations": 100, "learning_rate": 0.05, "depth": 6,
                          "window_size": 50, "prediction_horizon": 5, "min_data_required": 100},
             "quant_factor": {"n_estimators": 100, "max_depth": 8, "learning_rate": 0.05,
-                             "n_factors": 16, "window_size": 60, "prediction_horizon": 5,
+                             "n_factors": 20, "window_size": 60, "prediction_horizon": 5,
                              "min_data_required": 120, "lookback_windows": [5, 10, 20, 60]},
         }
 
@@ -867,7 +868,7 @@ class ModelFactory:
         try:
             params = self._get_model_params("quant_factor")
             min_data_required = params.get("min_data_required", 120)
-            n_factors = params.get("n_factors", 16)
+            n_factors = params.get("n_factors", 20)
             window_size = params.get("window_size", 60)
             prediction_horizon = params.get("prediction_horizon", 5)
 
@@ -966,6 +967,30 @@ class ModelFactory:
             f["ma_cross_5_20"] = cross_5_20
             f["ma_cross_20_60"] = cross_20_60
 
+            # ==========================================================
+            # 🌟 新增：将图片策略特征作为因子加入模型训练池
+            # ==========================================================
+            ma13 = ma_series(c, 13)
+            ma30 = ma_series(c, 30)
+            
+            # 特征1：强势股二次启动（突破30日线）
+            break_ma30 = np.zeros(len(c))
+            for i in range(1, len(c)):
+                if c[i] > ma30[i] and c[i-1] <= ma30[i-1]:
+                    break_ma30[i] = 1.0
+            f["strategy_break_ma30"] = break_ma30
+            
+            # 特征2：均线多头排列（强势确认）
+            f["strategy_is_strong"] = np.where(c > ma13, 1.0, 0.0)
+
+            # 特征3：动量背离近似 (X/Y/Z共振简版)
+            price_roll_min = pd.Series(c).rolling(20).min().values
+            is_price_low = (c == price_roll_min)
+            
+            ret_roll_min = pd.Series(ret).rolling(20).min().values
+            is_mom_div = is_price_low & (ret > ret_roll_min)
+            f["strategy_divergence"] = is_mom_div.astype(float)
+
             # 价格位置
             for w in [10, 20]:
                 hh = pd.Series(h).rolling(w, min_periods=1).max().values
@@ -1009,8 +1034,18 @@ class ModelFactory:
             f["mfi"] = 100 - (100 / (1 + pos_sum / neg_sum))
 
             f = f.ffill().bfill().fillna(0)
+            
+            # 🌟 修改：特征筛选，强制保留 'strategy' 开头的特征
             if len(f.columns) > n_factors:
-                top_cols = f.var().nlargest(n_factors).index
+                force_keep = [col for col in f.columns if 'strategy' in col]
+                others = [col for col in f.columns if col not in force_keep]
+                
+                # 计算其余因子的方差，保留剩下的名额
+                n_others = max(0, n_factors - len(force_keep))
+                top_others = f[others].var().nlargest(n_others).index.tolist()
+                
+                # 合并保留
+                top_cols = force_keep + top_others
                 f = f[top_cols]
             elif len(f.columns) < n_factors:
                 for i in range(n_factors - len(f.columns)):
@@ -1072,7 +1107,9 @@ class ModelFactory:
             }
             print(f"  ✓ 量化因子模型训练完成 R² train={train_score:.4f}, val={val_score:.4f}")
             print(f"    Top-5 因子: {top5_str}")
-
+            # 🌟 新增验证
+            force_kept = [c for c in X.columns if 'strategy' in c]
+            print(f"    [验证] 本次参与模型训练的策略特征: {force_kept}")
             del X, y, X_scaled, X_train, X_val, y_train, y_val
         except Exception as e:
             print(f"  ❌ 量化因子模型训练失败: {str(e)}")

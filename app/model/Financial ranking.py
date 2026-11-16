@@ -1,9 +1,4 @@
-"""
-优化要点：
-- 4 层 .copy() 合并为一次布尔掩码 + 单份工作副本
-- 数值列一次性转换，不做重复 to_numeric
-- 输出用写入流，逐行生成，不再构造大字符串
-"""
+# Financial ranking.py
 import pandas as pd
 import os
 import gc
@@ -35,7 +30,7 @@ def analyze_stock_data():
             df[col] = pd.to_numeric(df[col], errors="coerce")
         df["股票代码"] = df["股票代码"].astype(str).str.zfill(6)
 
-        # 三层筛选 -> 合并为布尔掩码
+        # 资金面三层筛选 -> 合并为布尔掩码
         mask1 = (df["主力流入净额"] > 100_000_000) & (df["主力流入净额占比%"] > 5)
         mask2 = mask1 & (df["超大单流入占比%"] > 3)
         mask3 = mask2 & (df["涨跌幅%"] > 0) & (df["涨跌幅%"] < 10)
@@ -58,12 +53,31 @@ def analyze_stock_data():
                 return pd.Series(0.0, index=series.index)
             return series / max_val
 
-        work_df["综合评分"] = (
+        # ==========================================================
+        # 🌟 新增：计算综合评分（资金面 + 技术面策略）
+        # ==========================================================
+        # 资金面基础分 (0-1之间)
+        capital_score = (
             normalize_series(work_df["主力流入净额"]) * 0.4
             + normalize_series(work_df["主力流入净额占比%"]) * 0.3
             + normalize_series(work_df["超大单流入占比%"]) * 0.2
             + normalize_series(work_df["涨跌幅%"]) * 0.1
         )
+
+        # 假设数据源中已经包含了技术面标记（如果还没有，可以直接跳过这步）
+        # 对应图片策略：如果出现 XYZ_Resonance（共振）或 break_ma30（突破），给予 1.5 倍加权
+        tech_bonus = pd.Series(1.0, index=work_df.index) # 默认无加成
+        
+        if "XYZ_Resonance" in work_df.columns:
+            tech_bonus.loc[work_df["XYZ_Resonance"] == 1] = 1.5
+            print("已应用【多因子背离共振】技术面加成 (x1.5)")
+            
+        if "break_ma30" in work_df.columns:
+            tech_bonus.loc[work_df["break_ma30"] == 1] *= 1.5
+            print("已应用【强势股突破30日均线】技术面加成 (x1.5)")
+
+        # 最终综合评分
+        work_df["综合评分"] = capital_score * tech_bonus
 
         df_sorted = work_df.sort_values(
             by=["综合评分", "主力流入净额"], ascending=[False, False]
@@ -97,7 +111,6 @@ def analyze_stock_data():
         with open(output_file, "r", encoding="utf-8") as fh:
             print(fh.read())
 
-        # 释放大对象
         del df, work_df, df_sorted, top_10
         gc.collect()
         return True

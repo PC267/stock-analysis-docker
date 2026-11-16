@@ -1,3 +1,4 @@
+# data_processor.py
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
@@ -9,13 +10,14 @@ class DataProcessor:
 
     @staticmethod
     def _ensure_numeric_columns(df):
-        """统一数值字段类型，避免后续训练时出现字符串/NaN。"""
         if df is None or df.empty:
             return df
 
         numeric_cols = [
             'open', 'high', 'low', 'close', 'volume', 'amount', 'turn', 'pctChg',
-            'returns', 'MA5', 'MA10', 'MA20', 'RSI', 'volatility'
+            'returns', 'MA5', 'MA10', 'MA20', 'MA13', 'MA30', 'RSI', 'volatility',
+            'break_ma30', 'is_strong_trend', 'MACD_DIF', 'MACD_DEA', 'KDJ_K', 'KDJ_D', 
+            'X_div', 'Y_div', 'Z_div', 'XYZ_Resonance'  # 🌟 新增特征
         ]
         for col in numeric_cols:
             if col in df.columns:
@@ -23,9 +25,7 @@ class DataProcessor:
         return df
 
     def process_data(self, stock_data):
-        """处理原始数据 - 添加完整的错误处理与时间顺序校验。"""
         print("处理数据...")
-
         if stock_data is None or len(stock_data) == 0:
             print("❌ 输入数据为空")
             return None
@@ -56,7 +56,7 @@ class DataProcessor:
                 print("❌ 收盘价异常：最大值 <= 0")
                 return None
 
-            print("  添加技术指标...")
+            print("  添加技术指标（含策略特征）...")
             data_with_indicators = self.add_technical_indicators(stock_data)
 
             print("  数据清洗...")
@@ -84,24 +84,19 @@ class DataProcessor:
             return None
 
     def add_technical_indicators(self, df):
-        """添加技术指标。注意：这里只使用当前及过去数据，不使用未来数据。"""
         try:
             if len(df) < 5:
                 return df
 
             df = df.copy()
 
-            df['returns'] = (
-                df['close']
-                .pct_change()
-                .replace([np.inf, -np.inf], np.nan)
-                .astype(np.float32)
-            )
-
+            # 基础特征
+            df['returns'] = df['close'].pct_change().replace([np.inf, -np.inf], np.nan).astype(np.float32)
             df['MA5'] = df['close'].rolling(window=5, min_periods=1).mean().astype(np.float32)
             df['MA10'] = df['close'].rolling(window=10, min_periods=1).mean().astype(np.float32)
             df['MA20'] = df['close'].rolling(window=20, min_periods=1).mean().astype(np.float32)
 
+            # RSI
             delta = df['close'].diff().astype(np.float32)
             gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean().astype(np.float32)
             loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean().astype(np.float32)
@@ -109,12 +104,57 @@ class DataProcessor:
             df['RSI'] = (100 - (100 / (1 + rs))).fillna(50).astype(np.float32)
 
             df['volatility'] = (
-                df['returns']
-                .rolling(window=20, min_periods=1)
-                .std()
-                .fillna(0)
-                .astype(np.float32) * np.sqrt(252)
+                df['returns'].rolling(window=20, min_periods=1).std().fillna(0).astype(np.float32) * np.sqrt(252)
             )
+
+            # ==========================================================
+            # 🌟 新增1：图4 强势股二次启动策略指标
+            # ==========================================================
+            df['MA13'] = df['close'].rolling(window=13, min_periods=1).mean().astype(np.float32)
+            df['MA30'] = df['close'].rolling(window=30, min_periods=1).mean().astype(np.float32)
+            
+            # 确认强势：股价在13日均线之上
+            df['is_strong_trend'] = (df['close'] > df['MA13']).astype(np.float32)
+            # 确认机会：今日收盘价突破30日均线
+            df['break_ma30'] = ((df['close'] > df['MA30']) & (df['close'].shift(1) <= df['MA30'].shift(1))).astype(np.float32)
+
+            # ==========================================================
+            # 🌟 新增2：图1-3 多因子背离指标 (X/Y/Z)
+            # ==========================================================
+            # 计算MACD (Y因子基础)
+            exp12 = df['close'].ewm(span=12, adjust=False).mean()
+            exp26 = df['close'].ewm(span=26, adjust=False).mean()
+            df['MACD_DIF'] = (exp12 - exp26).astype(np.float32)
+            df['MACD_DEA'] = df['MACD_DIF'].ewm(span=9, adjust=False).mean().astype(np.float32)
+
+            # 计算KDJ (Y因子基础)
+            low_9 = df['low'].rolling(window=9, min_periods=1).min()
+            high_9 = df['high'].rolling(window=9, min_periods=1).max()
+            rsv = (df['close'] - low_9) / (high_9 - low_9 + 1e-10) * 100
+            df['KDJ_K'] = rsv.ewm(com=2, adjust=False).mean().fillna(50).astype(np.float32)
+            df['KDJ_D'] = df['KDJ_K'].ewm(com=2, adjust=False).mean().fillna(50).astype(np.float32)
+
+            # 背离检测 (使用简化逻辑：近14日价格创新低，但指标未创新低)
+            # 寻找价格低点 (14天内最低点)
+            price_low_14 = df['close'].rolling(window=14, min_periods=1).min()
+            is_price_low = (df['close'] == price_low_14)
+            
+            # X因子：价量背离 (价创新低，量未创新低)
+            vol_low_14 = df['volume'].rolling(window=14, min_periods=1).min()
+            df['X_div'] = (is_price_low & (df['volume'] > vol_low_14)).astype(np.float32)
+            
+            # Y因子：MACD/KDJ背离 (价创新低，MACD/KDJ未创新低)
+            macd_low_14 = df['MACD_DIF'].rolling(window=14, min_periods=1).min()
+            kdj_low_14 = df['KDJ_K'].rolling(window=14, min_periods=1).min()
+            df['Y_div'] = (is_price_low & (df['MACD_DIF'] > macd_low_14) & (df['KDJ_K'] > kdj_low_14)).astype(np.float32)
+            
+            # Z因子：RSI背离 (价创新低，RSI未创新低)
+            rsi_low_14 = df['RSI'].rolling(window=14, min_periods=1).min()
+            df['Z_div'] = (is_price_low & (df['RSI'] > rsi_low_14)).astype(np.float32)
+
+            # 因子共振：5日内至少有2个信号出现
+            div_sum = df['X_div'].rolling(5, min_periods=1).sum() + df['Y_div'].rolling(5, min_periods=1).sum() + df['Z_div'].rolling(5, min_periods=1).sum()
+            df['XYZ_Resonance'] = (div_sum >= 2).astype(np.float32)
 
             return df
 
@@ -123,7 +163,6 @@ class DataProcessor:
             return df
 
     def clean_data(self, df):
-        """数据清洗：删除无效值并保持时间顺序。"""
         try:
             if df is None:
                 return None
@@ -133,7 +172,11 @@ class DataProcessor:
                 df = df.sort_values('date').drop_duplicates(subset=['date'], keep='last')
 
             original_len = len(df)
-            required_cols = ['open', 'high', 'low', 'close', 'volume', 'returns', 'MA5', 'MA10', 'MA20', 'RSI', 'volatility']
+            # 🌟 已将新增的策略字段加入白名单
+            required_cols = [
+                'open', 'high', 'low', 'close', 'volume', 'returns', 'MA5', 'MA10', 'MA20', 'RSI', 'volatility',
+                'MA13', 'MA30', 'is_strong_trend', 'break_ma30', 'MACD_DIF', 'MACD_DEA', 'KDJ_K', 'KDJ_D', 'X_div', 'Y_div', 'Z_div', 'XYZ_Resonance'
+            ]
             existing_cols = [c for c in required_cols if c in df.columns]
             if not existing_cols:
                 print("  ⚠️ 没有可用于训练的有效列")
@@ -142,12 +185,8 @@ class DataProcessor:
             df = df.loc[:, list(dict.fromkeys(existing_cols))].dropna().copy()
             cleaned_len = len(df)
 
-            if cleaned_len == 0:
-                print("  ⚠️ 清洗后数据为空")
-                return None
-
-            if cleaned_len < 5:
-                print("  ⚠️ 清洗后数据过少，无法继续训练")
+            if cleaned_len == 0 or cleaned_len < 5:
+                print("  ⚠️ 清洗后数据为空或过少")
                 return None
 
             print(f"  数据清洗: {original_len} -> {cleaned_len} 条记录")
@@ -159,7 +198,6 @@ class DataProcessor:
 
     @staticmethod
     def _safe_fit_scaler(values):
-        """缩放器安全拟合：避免全空/常量数组导致失败。"""
         arr = np.asarray(values, dtype=np.float32)
         if arr.size == 0 or not np.isfinite(arr).any():
             return None
@@ -168,7 +206,6 @@ class DataProcessor:
         return arr
 
     def prepare_for_training(self, df, fit_scaler=True):
-        """准备训练数据；默认在训练前先完成时间顺序一致性检查，并且不在这里做未来信息拟合。"""
         try:
             if df is None or len(df) == 0:
                 print("  ⚠️ 准备训练数据时输入为空")
@@ -181,18 +218,18 @@ class DataProcessor:
                 print("  ⚠️ 缺少 close/volume 字段，无法准备训练数据")
                 return {}
 
+            # 🌟 加入新字段作为模型学习的因子
             valid_cols = [
-                c for c in ['close', 'volume', 'open', 'high', 'low', 'returns', 'MA5', 'MA10', 'MA20', 'RSI', 'volatility']
+                c for c in ['close', 'volume', 'open', 'high', 'low', 'returns', 'MA5', 'MA10', 'MA20', 'RSI', 'volatility',
+                            'MA13', 'MA30', 'is_strong_trend', 'break_ma30', 'XYZ_Resonance'] 
                 if c in df.columns
             ]
             df = df[valid_cols].dropna().copy().astype(np.float32)
 
             if len(df) == 0:
-                print("  ⚠️ 过滤无效数据后为空")
                 return {}
 
             if not np.isfinite(df['close'].to_numpy(dtype=np.float32, copy=False)).all():
-                print("  ⚠️ close 列存在非有限值")
                 return {}
 
             close_prices = df['close'].to_numpy(dtype=np.float32).reshape(-1, 1)
@@ -210,7 +247,8 @@ class DataProcessor:
                 volume_scaled = scaler_volume.transform(volume)
 
             factor_data = {}
-            factor_cols = ['MA5', 'MA10', 'MA20', 'RSI', 'volatility']
+            # 🌟 将技术策略指标加入因子池 (factor_cols)
+            factor_cols = ['MA5', 'MA10', 'MA20', 'MA13', 'MA30', 'RSI', 'volatility', 'break_ma30', 'is_strong_trend', 'XYZ_Resonance']
             factor_df = df[[c for c in factor_cols if c in df.columns]].dropna().astype(np.float32)
 
             if len(factor_df) > 0:

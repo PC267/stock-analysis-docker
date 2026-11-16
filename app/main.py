@@ -304,7 +304,7 @@ def analyze_single_stock(stock_code, stock_name, days_to_simulate, output_format
                     else:
                         # 如果无法获取推荐模型，使用默认组合
                         recommended_models = [('arima', 0.4), ('xgboost', 0.3), ('garch', 0.3)]
-                        print(f"  ⚠️ 未找到针对'{market_regise}'的配置，使用默认组合")
+                        print(f"  ⚠️ 未找到针对'{market_regime}'的配置，使用默认组合")
                         for model_name, weight in recommended_models:
                             print(f"  {model_name:<15}: {weight * 100:.1f}%")
                 except Exception as e:
@@ -434,6 +434,24 @@ def analyze_single_stock(stock_code, stock_name, days_to_simulate, output_format
                 # 创建报告生成器实例
                 report_generator = ReportGenerator(config)
 
+                # 🌟 新增：提取当天的策略标签
+                strategy_tags = []
+                if 'processed' in processed_data and not processed_data['processed'].empty:
+                    last_row = processed_data['processed'].iloc[-1]
+                    
+                    # 注意：列名必须和 data_processor.py 里生成的一模一样
+                    if last_row.get('strategy_break_ma30') == 1.0:
+                        strategy_tags.append({'text': '🚀 突破MA30', 'class': 'tag-break'})
+                    if last_row.get('strategy_is_strong') == 1.0:
+                        strategy_tags.append({'text': '💪 强势多头', 'class': 'tag-strong'})
+                    if last_row.get('strategy_divergence') == 1.0:
+                        strategy_tags.append({'text': '🌟 背离共振', 'class': 'tag-resonance'})
+                        
+                    if strategy_tags:
+                        print(f"✓ 提取到策略标签: {[t['text'] for t in strategy_tags]}")
+                    else:
+                        print("ℹ️ 当前股票未触发策略标签")
+
                 # 检查是否是统一的报告生成器
                 if hasattr(report_generator, '_generate_html_report'):
                     # 这是统一版本，可以指定输出格式
@@ -445,7 +463,8 @@ def analyze_single_stock(stock_code, stock_name, days_to_simulate, output_format
                         simulated_data=simulated_data,
                         models=models,
                         best_model_name=best_model_name,
-                        output_format=output_format  # 传递输出格式
+                        output_format=output_format,  # 传递输出格式
+                        strategy_tags=strategy_tags  # 🌟 传递策略标签
                     )
 
                     if result:
@@ -475,11 +494,13 @@ def analyze_single_stock(stock_code, stock_name, days_to_simulate, output_format
                         return None
 
                 else:
+                    # 如果不是统一版本，走原来的逻辑（同样传入 strategy_tags）
                     result = report_generator.generate_report(
                         processed_data,
                         simulated_data,
                         models,
-                        best_model_name
+                        best_model_name,
+                        strategy_tags=strategy_tags  # 🌟 传递策略标签
                     )
 
                     if result:
