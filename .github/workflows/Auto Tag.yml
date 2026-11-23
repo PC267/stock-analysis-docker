@@ -30,7 +30,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WITH_V: true
           DEFAULT_BUMP: patch
-          INITIAL_VERSION: 1.0.0
+          INITIAL_VERSION: 2.1.0
           PATCH_STRING_TOKEN: '#patch'
           MINOR_STRING_TOKEN: '#minor'
           MAJOR_STRING_TOKEN: '#major'
