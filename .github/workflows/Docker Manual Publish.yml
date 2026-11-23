@@ -1,0 +1,123 @@
+name: Docker Manual Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag (e.g., v2.1.0, latest)'
+        required: true
+        default: 'v1.0.0'
+      variant:
+        description: 'Image variant'
+        required: true
+        type: choice
+        default: 'full'
+        options:
+          - full
+          - light
+
+concurrency:
+  group: docker-publish-${{ github.ref }}-${{ inputs.image_tag }}-${{ inputs.variant }}
+  cancel-in-progress: true
+
+env:
+  GHCR_REGISTRY: ghcr.io
+  DOCKERHUB_REGISTRY: docker.io
+  GHCR_IMAGE_NAME: ${{ github.repository }}
+  DOCKERHUB_IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag
+        run: |
+          if [[ "${{ inputs.image_tag }}" =~ [[:space:]] ]]; then
+            echo "image_tag must not contain spaces"; exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKERHUB_REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Select Dockerfile
+        id: dockerfile
+        run: |
+          if [[ "${{ inputs.variant }}" == "full" ]]; then
+            echo "path=web_stock_picker/Dockerfile.full" >> "$GITHUB_OUTPUT"
+            echo "suffix=-full" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=Dockerfile" >> "$GITHUB_OUTPUT"
+            echo "suffix=-light" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract metadata
+        id: meta-ghcr
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ inputs.image_tag }}${{ steps.dockerfile.outputs.suffix }}
+            type=raw,value=latest${{ steps.dockerfile.outputs.suffix }}
+
+      - name: Extract metadata for Docker Hub
+        id: meta-dockerhub
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ inputs.image_tag }}${{ steps.dockerfile.outputs.suffix }}
+            type=raw,value=latest${{ steps.dockerfile.outputs.suffix }}
+
+      - name: Pre-publish smoke
+        run: |
+          docker build -t stock-analysis:smoke -f ${{ steps.dockerfile.outputs.path }} .
+          docker run --rm stock-analysis:smoke python -c "
+          from app.config_loader import load_config; print('✅ config')
+          from web_stock_picker.app import app; print('✅ web app')
+          import pandas; print('✅ pandas')
+          import numpy; print('✅ numpy')
+          print('✅ smoke ok')
+          "
+
+      - name: Build and push multi-arch
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ steps.dockerfile.outputs.path }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.meta-ghcr.outputs.tags }}
+            ${{ steps.meta-dockerhub.outputs.tags }}
+          labels: ${{ steps.meta-ghcr.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          echo "### Docker images pushed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Variant: \`${{ inputs.variant }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- GHCR: \`${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Docker Hub: \`${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Tags: \`${{ inputs.image_tag }}${{ steps.dockerfile.outputs.suffix }}\`, \`latest${{ steps.dockerfile.outputs.suffix }}\`" >> "$GITHUB_STEP_SUMMARY"
